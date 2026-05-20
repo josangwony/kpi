@@ -129,6 +129,13 @@ const KPI_DEFS = [
     target: 92, warn: 90, danger: 88,
   },
   {
+    key: 'foamInsourcing', label: '외주 폼 내작 진행률', short: '내작 진행', process: 'foam',
+    unit: '%', decimals: 1, step: 0.1, min: 0, max: 100, higher: true,
+    color: '#F97316', soft: '#FFEDD5', dark: '#9A3412',
+    desc: '외주 폼의 내작 전환 진척률',
+    target: 80, warn: 60, danger: 40,
+  },
+  {
     key: 'quiltingDefect', label: '퀼팅 봉탈률', short: '봉탈률', process: 'quilting',
     unit: '%', decimals: 2, step: 0.01, min: 0, max: 100, higher: false,
     color: '#8B5CF6', soft: '#EDE9FE', dark: '#6D28D9',
@@ -230,6 +237,7 @@ function tasksToFlatKpis(tasks) {
   };
   return {
     spongeYield:      safeAvg([t.foam?.task1?.recotec, t.foam?.task1?.elastic, t.foam?.task1?.terol]),
+    foamInsourcing:   (t.foam?.task2?.progress      ?? null) === '' ? null : (t.foam?.task2?.progress      ?? null),
     quiltingDefect:   (t.quilting?.task1?.quilting   ?? null) === '' ? null : (t.quilting?.task1?.quilting   ?? null),
     interlockDefect:  (t.quilting?.task1?.interlock  ?? null) === '' ? null : (t.quilting?.task1?.interlock  ?? null),
     springDaily:      safeAvg([t.spring?.task1?.line1, t.spring?.task1?.line2]),
@@ -544,7 +552,7 @@ function getAchievement(kpiKey, value, targets) {
 /* ============================================================
    3) 저장소 — localStorage 캐시 + Firebase 동기화
    ============================================================ */
-const STORE_KEYS = ['production', 'quality', 'targets', 'qualityTargets', 'erpReports', 'priceMaster', 'erpTrash', 'productionTrash'];
+const STORE_KEYS = ['production', 'quality', 'targets', 'qualityTargets', 'erpReports', 'priceMaster', 'erpTrash', 'productionTrash', 'weeklyJournal'];
 const LS = {
   get: (k, fallback) => {
     try { const v = localStorage.getItem('kpi_' + k); return v ? JSON.parse(v) : fallback; }
@@ -673,6 +681,7 @@ function App() {
     priceMaster:     LS.get('priceMaster', []),
     erpTrash:        LS.get('erpTrash', []),
     productionTrash: LS.get('productionTrash', []),
+    weeklyJournal:   LS.get('weeklyJournal', {}),
   });
   const [lastSync, setLastSync] = useState(null);
 
@@ -690,6 +699,7 @@ function App() {
         priceMaster:     fb.priceMaster     ?? prev.priceMaster,
         erpTrash:        fb.erpTrash        ?? prev.erpTrash,
         productionTrash: fb.productionTrash ?? prev.productionTrash,
+        weeklyJournal:   fb.weeklyJournal   ?? prev.weeklyJournal,
       }));
       setLastSync(new Date());
       if (window.__fb && window.__fb.listen) {
@@ -722,6 +732,7 @@ function App() {
   const savePriceMaster     = (pm)      => { setData(prev => ({...prev, priceMaster:     pm})); LS.set('priceMaster',     pm); };
   const saveErpTrash        = (t)       => { setData(prev => ({...prev, erpTrash:        t})); LS.set('erpTrash',        t); };
   const saveProductionTrash = (t)       => { setData(prev => ({...prev, productionTrash: t})); LS.set('productionTrash', t); };
+  const saveWeeklyJournal   = (j)       => { setData(prev => ({...prev, weeklyJournal:   j})); LS.set('weeklyJournal',   j); };
 
   // 휴지통 7일 자동 청소 (erpTrash + productionTrash)
   useEffect(() => {
@@ -758,7 +769,7 @@ function App() {
           <TopBar route={route} navigate={navigate} lastSync={lastSync} />
           <main className="flex-1 px-6 lg:px-10 py-6 max-w-[1600px] w-full mx-auto">
             {route === '/dashboard'           && <DashboardPage     data={data} />}
-            {route === '/production'          && <ProductionPage    data={data} onSave={saveProduction} onSaveTrash={saveProductionTrash} />}
+            {route === '/production'          && <ProductionPage    data={data} onSave={saveProduction} onSaveTrash={saveProductionTrash} onSaveJournal={saveWeeklyJournal} />}
             {route === '/quality'             && <QualityPage       data={data}
                                                                     onSave={saveQuality}
                                                                     onSaveErp={saveErpReports}
@@ -1049,6 +1060,13 @@ function Icon({ name, size = 16, className = '', strokeWidth = 2 }) {
       <path d="M9 21V11h6v10"/>
       <path d="M9 7h.01"/>
       <path d="M15 7h.01"/>
+    </Fragment>),
+    chevronDown:  (<polyline points="6 9 12 15 18 9"/>),
+    chevronRight: (<polyline points="9 18 15 12 9 6"/>),
+    notebook: (<Fragment>
+      <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>
+      <path d="M8 7h8"/>
+      <path d="M8 11h6"/>
     </Fragment>),
   };
   return (
@@ -1341,7 +1359,7 @@ function DashboardPage({ data }) {
         {!prodCurrent.count
           ? <EmptyHint iconName="trending" msg={`${periodLabel}에 해당하는 주간 입력이 없습니다.`} />
           : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mt-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mt-3">
               {KPI_DEFS.map((kpi, i) => (
                 <KpiHeroCard key={kpi.key} kpi={kpi}
                   cur={prodCurrent.values[kpi.key]}
@@ -2572,7 +2590,7 @@ function RecentQualityTable({ entries }) {
 /* ============================================================
    22) PRODUCTION PAGE — 일별 입력
    ============================================================ */
-function ProductionPage({ data, onSave, onSaveTrash }) {
+function ProductionPage({ data, onSave, onSaveTrash, onSaveJournal }) {
   const toast = useToast();
   const [tab, setTab] = useState('input');
   const todayIso = getISOWeek(todayYMD());
@@ -2638,6 +2656,7 @@ function ProductionPage({ data, onSave, onSaveTrash }) {
       <div className="flex items-center justify-between gap-2 flex-wrap animate-fade-up">
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-1.5 inline-flex gap-1 flex-wrap">
           <ProductionTabBtn active={tab==='input'}   onClick={() => setTab('input')}   icon="pencil"    label="주간 입력" />
+          <ProductionTabBtn active={tab==='journal'} onClick={() => setTab('journal')} icon="notebook"  label="주간 기록" />
           <ProductionTabBtn active={tab==='summary'} onClick={() => setTab('summary')} icon="dashboard" label="종합 지표" />
           <ProductionTabBtn active={tab==='history'} onClick={() => setTab('history')} icon="upload"    label="작성 이력" />
         </div>
@@ -2683,6 +2702,7 @@ function ProductionPage({ data, onSave, onSaveTrash }) {
         )}
       </div>
       {tab === 'input'   && <ProductionInputTab   tasks={tasks} updateTask={updateTask} />}
+      {tab === 'journal' && <WeeklyJournalTab     data={data} onSaveJournal={onSaveJournal} />}
       {tab === 'summary' && <ProductionSummaryTab data={data} />}
       {tab === 'history' && <ProductionHistoryTab data={data} onSave={onSave} onSaveTrash={onSaveTrash} />}
     </div>
@@ -2791,6 +2811,174 @@ function TaskInputCard({ num, task, value, onUpdate, accent }) {
           placeholder="이번 주 진행 예정 사항…"
           className="w-full h-28 px-3 py-2 border border-slate-200 rounded text-sm resize-none bg-white focus:outline-none focus:ring-2 focus:ring-sky-300 placeholder:text-slate-300 leading-relaxed" />
       </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   22-A2) WEEKLY JOURNAL TAB — 공정별 담당자 주간 성장 기록
+   ============================================================ */
+const JOURNAL_OWNERS = {
+  foam:     ['고영주'],
+  quilting: ['조상원', '양승우'],
+  spring:   ['김민현'],
+};
+
+// 주간 기록 시작 주차 (2026 5월 3주차) — 이전 주차는 노출하지 않음
+const JOURNAL_START_YEAR = 2026;
+const JOURNAL_START_WEEK = 21;
+
+function WeeklyJournalTab({ data, onSaveJournal }) {
+  const journal = data.weeklyJournal || {};
+  const todayIso = getISOWeek(todayYMD());
+  const todayWeekKey = `${todayIso.year}-W${pad2(todayIso.week)}`;
+
+  // 시작 주차(2026-W21) → 오늘 +4주 (미래 4주는 자동, 한 주 지나면 한 주가 더 생성됨)
+  const weeks = useMemo(() => {
+    const startMonday = isoWeekToMonday(JOURNAL_START_YEAR, JOURNAL_START_WEEK);
+    const todayMonday = isoWeekToMonday(todayIso.year, todayIso.week);
+    const endMonday   = new Date(todayMonday);
+    endMonday.setUTCDate(todayMonday.getUTCDate() + 4 * 7);
+    const list = [];
+    const cur = new Date(endMonday);
+    while (cur.getTime() >= startMonday.getTime()) {
+      const ymd = `${cur.getUTCFullYear()}-${pad2(cur.getUTCMonth()+1)}-${pad2(cur.getUTCDate())}`;
+      list.push(getISOWeek(ymd));
+      cur.setUTCDate(cur.getUTCDate() - 7);
+    }
+    return list;
+  }, [todayIso.year, todayIso.week]);
+
+  const [expanded, setExpanded] = useState(() => ({ [todayWeekKey]: true }));
+
+  const toggle = (key) => setExpanded(prev => ({ ...prev, [key]: !prev[key] }));
+
+  const updateEntry = (weekKey, procKey, owner, text) => {
+    const next = {
+      ...(journal || {}),
+      [weekKey]: {
+        ...((journal || {})[weekKey] || {}),
+        [procKey]: {
+          ...(((journal || {})[weekKey] || {})[procKey] || {}),
+          [owner]: text,
+        },
+      },
+    };
+    onSaveJournal(next);
+  };
+
+  const visibleProcs = PROCESS_DEFS.filter(p => JOURNAL_OWNERS[p.key]);
+
+  return (
+    <div className="space-y-3 animate-fade-up">
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+        <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Icon name="notebook" size={16} className="text-slate-400" />
+            <h3 className="text-sm font-bold text-slate-700">주간 기록</h3>
+          </div>
+          <div className="text-[11px] text-slate-400">담당자별로 주간 성장·이슈·메모를 자유롭게 기록</div>
+        </div>
+        <div className="divide-y divide-slate-100">
+          {weeks.map(iso => {
+            const wk    = `${iso.year}-W${pad2(iso.week)}`;
+            const ml    = isoWeekToMonthLabel(iso.year, iso.week);
+            const label = `${iso.year} ${ml.month}월 ${ml.weekOfMonth}주차`;
+            const isFuture = wk > todayWeekKey;
+            const isCurrent = wk === todayWeekKey;
+            const isOpen = !!expanded[wk];
+            const entry = (journal || {})[wk] || {};
+            const totalChars = visibleProcs.reduce((sum, p) => {
+              const owners = JOURNAL_OWNERS[p.key];
+              return sum + owners.reduce((s, o) => s + (((entry[p.key] || {})[o] || '').length), 0);
+            }, 0);
+
+            return (
+              <div key={wk} className="bg-white">
+                <button onClick={() => toggle(wk)}
+                  className="w-full px-5 py-3 flex items-center gap-3 hover:bg-slate-50 transition-colors">
+                  <Icon name={isOpen ? 'chevronDown' : 'chevronRight'} size={16} className="text-slate-400" />
+                  <span className={`text-sm font-bold ${isCurrent ? 'text-sky-600' : isFuture ? 'text-slate-400' : 'text-slate-700'}`}>{label}</span>
+                  {isCurrent && <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-sky-100 text-sky-700">이번 주</span>}
+                  {isFuture && <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-500">예정</span>}
+                  <div className="flex-1" />
+                  {totalChars > 0 && (
+                    <span className="text-[11px] text-slate-400 num">{totalChars}자 기록</span>
+                  )}
+                </button>
+                {isOpen && (
+                  <div className="px-5 pb-5 pt-1 animate-slide-down">
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                      {visibleProcs.map(proc => (
+                        <div key={proc.key}
+                             className="rounded-xl border border-slate-200 bg-white overflow-hidden flex flex-col"
+                             style={{ background: proc.soft + '40' }}>
+                          <div className="px-4 py-2.5 flex items-center gap-2 border-b border-slate-100"
+                               style={{ background: proc.soft + '80' }}>
+                            <span className="w-2 h-2 rounded-full" style={{ background: proc.color }}></span>
+                            <h4 className="text-sm font-bold" style={{ color: proc.color }}>{proc.label}</h4>
+                          </div>
+                          <div className="p-3 space-y-2.5 bg-white">
+                            {JOURNAL_OWNERS[proc.key].map(owner => (
+                              <JournalCell key={owner}
+                                owner={owner}
+                                value={((entry[proc.key] || {})[owner]) || ''}
+                                onCommit={(text) => updateEntry(wk, proc.key, owner, text)} />
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function JournalCell({ owner, value, onCommit }) {
+  const [draft, setDraft] = useState(value || '');
+  const draftRef    = useRef(draft);
+  const valueRef    = useRef(value || '');
+  const onCommitRef = useRef(onCommit);
+  useEffect(() => { setDraft(value || ''); valueRef.current = value || ''; }, [value]);
+  useEffect(() => { draftRef.current = draft; }, [draft]);
+  useEffect(() => { onCommitRef.current = onCommit; }, [onCommit]);
+
+  const commit = () => {
+    const cur = draftRef.current || '';
+    if (cur === (valueRef.current || '')) return;
+    onCommitRef.current(cur);
+  };
+
+  // 창 닫기 · 탭 전환 · 새로고침 직전 강제 commit (onBlur가 안 터지는 경우 대비)
+  useEffect(() => {
+    const flush = () => {
+      const cur = draftRef.current || '';
+      if (cur !== (valueRef.current || '')) onCommitRef.current(cur);
+    };
+    const onVis = () => { if (document.visibilityState === 'hidden') flush(); };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, []);
+
+  return (
+    <div>
+      <label className="block text-[11px] text-slate-500 font-semibold mb-1">{owner}</label>
+      <textarea
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commit}
+        placeholder="이번 주 진행 사항·배운 점·이슈…"
+        className="w-full h-28 px-3 py-2 border border-slate-200 rounded text-sm resize-none bg-white focus:outline-none focus:ring-2 focus:ring-sky-300 placeholder:text-slate-300 leading-relaxed" />
     </div>
   );
 }
