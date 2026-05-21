@@ -1522,6 +1522,170 @@ function EmptyHint({ iconName = 'trending', msg }) {
   );
 }
 
+/* ============================================================
+   DateRangePicker — 듀얼 캘린더 popover (기간 선택 통합)
+   ============================================================ */
+function DateRangePicker({ startDate, endDate, onChange, min, max, accent = 'rose' }) {
+  const [open, setOpen] = useState(false);
+  const [pickingEnd, setPickingEnd] = useState(false);
+  const [hoverDate, setHoverDate] = useState(null);
+  const [viewMonth, setViewMonth] = useState(() => {
+    const base = startDate || max || todayYMD();
+    return base.slice(0, 7);
+  });
+  const [popPos, setPopPos] = useState({ top: 0, right: 0 });
+  const triggerRef = useRef(null);
+  const popoverRef = useRef(null);
+
+  // popover 위치 계산 (트리거 우측 정렬, 아래로 6px)
+  const recalcPos = () => {
+    if (!triggerRef.current) return;
+    const r = triggerRef.current.getBoundingClientRect();
+    setPopPos({ top: r.bottom + 6, right: window.innerWidth - r.right });
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    recalcPos();
+    const h = (e) => {
+      if (triggerRef.current?.contains(e.target) || popoverRef.current?.contains(e.target)) return;
+      setOpen(false);
+      setPickingEnd(false);
+    };
+    const onResize = () => recalcPos();
+    document.addEventListener('mousedown', h);
+    window.addEventListener('resize', onResize);
+    window.addEventListener('scroll', onResize, true);
+    return () => {
+      document.removeEventListener('mousedown', h);
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('scroll', onResize, true);
+    };
+  }, [open]);
+
+  const addMonths = (s, n) => {
+    const [y, m] = s.split('-').map(Number);
+    const d = new Date(Date.UTC(y, m - 1 + n, 1));
+    return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`;
+  };
+
+  const handleSelect = (ymd) => {
+    if (min && ymd < min) return;
+    if (max && ymd > max) return;
+    if (!pickingEnd) {
+      onChange(ymd, '');
+      setPickingEnd(true);
+    } else {
+      const [s, e] = ymd < startDate ? [ymd, startDate] : [startDate, ymd];
+      onChange(s, e);
+      setPickingEnd(false);
+      setOpen(false);
+      setHoverDate(null);
+    }
+  };
+
+  const fmtMonthLabel = (s) => {
+    const [y, m] = s.split('-').map(Number);
+    return `${y}년 ${m}월`;
+  };
+
+  const accentRing  = accent === 'rose' ? 'focus:ring-rose-300' : 'focus:ring-indigo-300';
+  const triggerText = (startDate && endDate)
+    ? `${startDate} ~ ${endDate}`
+    : (startDate ? `${startDate} ~ 종료일 선택` : '기간 선택');
+
+  return (
+    <div className="relative">
+      <button ref={triggerRef} onClick={() => setOpen(o => !o)}
+        className={`px-3 py-1.5 border border-slate-200 rounded-lg text-xs num bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 ${accentRing} flex items-center gap-2`}>
+        <Icon name="dashboard" size={12} className="text-slate-400" />
+        <span className={startDate ? 'text-slate-700' : 'text-slate-400'}>{triggerText}</span>
+      </button>
+      {open && ReactDOM.createPortal(
+        <div ref={popoverRef}
+             style={{ position: 'fixed', top: popPos.top, right: popPos.right, zIndex: 9999 }}
+             className="bg-white border border-slate-200 rounded-xl shadow-xl p-4 animate-slide-down">
+          {/* 헤더 */}
+          <div className="flex items-center justify-between mb-3">
+            <button onClick={() => setViewMonth(addMonths(viewMonth, -1))}
+              className="w-7 h-7 rounded-md hover:bg-slate-100 text-slate-500 grid place-items-center">‹</button>
+            <span className="text-sm font-bold text-slate-700 num">{fmtMonthLabel(viewMonth)}</span>
+            <button onClick={() => setViewMonth(addMonths(viewMonth, 1))}
+              className="w-7 h-7 rounded-md hover:bg-slate-100 text-slate-500 grid place-items-center">›</button>
+          </div>
+          {/* 단일 달 그리드 */}
+          <MonthGrid month={viewMonth} startDate={startDate} endDate={endDate}
+            hoverDate={pickingEnd ? hoverDate : null}
+            onSelect={handleSelect} onHover={setHoverDate} min={min} max={max} accent={accent} />
+          {/* 상태 안내 */}
+          <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
+            <span>{pickingEnd ? '종료일을 선택하세요' : '시작일을 선택하세요'}</span>
+            <button onClick={() => { setOpen(false); setPickingEnd(false); setHoverDate(null); }}
+              className="text-slate-400 hover:text-slate-600">닫기</button>
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
+function MonthGrid({ month, startDate, endDate, hoverDate, onSelect, onHover, min, max, accent }) {
+  const [y, m] = month.split('-').map(Number);
+  const firstDay = new Date(Date.UTC(y, m - 1, 1));
+  const firstDow = firstDay.getUTCDay(); // 일=0, 월=1, ..., 토=6
+  const lastDate = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const cells = [];
+  for (let i = 0; i < firstDow; i++) cells.push(null);
+  for (let d = 1; d <= lastDate; d++) cells.push(d);
+
+  const accentCls = accent === 'rose'
+    ? { selected: 'bg-rose-500 text-white font-bold', inRange: 'bg-rose-100 text-rose-700' }
+    : { selected: 'bg-indigo-500 text-white font-bold', inRange: 'bg-indigo-100 text-indigo-700' };
+
+  // hover 범위: startDate가 선택된 상태에서 hoverDate가 있을 때
+  const previewEnd = hoverDate && startDate && hoverDate >= startDate ? hoverDate : null;
+  const rangeStart = startDate;
+  const rangeEnd   = endDate || previewEnd;
+
+  const dowColor = (col) => col === 0 ? 'text-rose-500' : col === 6 ? 'text-blue-500' : 'text-slate-700';
+  const dowHeaderColor = (col) => col === 0 ? 'text-rose-400' : col === 6 ? 'text-blue-400' : 'text-slate-400';
+
+  return (
+    <div>
+      <div className="grid grid-cols-7 gap-0.5 text-[10px] font-semibold text-center mb-1">
+        {['일','월','화','수','목','금','토'].map((d, i) =>
+          <div key={d} className={`w-8 ${dowHeaderColor(i)}`}>{d}</div>
+        )}
+      </div>
+      <div className="grid grid-cols-7 gap-0.5">
+        {cells.map((d, i) => {
+          if (d === null) return <div key={i} className="w-8 h-8" />;
+          const ymd = `${y}-${pad2(m)}-${pad2(d)}`;
+          const disabled = (min && ymd < min) || (max && ymd > max);
+          const isStart = ymd === rangeStart;
+          const isEnd   = ymd === rangeEnd;
+          const inRange = rangeStart && rangeEnd && ymd > rangeStart && ymd < rangeEnd;
+          const col = i % 7;
+          const baseColor = dowColor(col);
+          const cls = disabled ? 'text-slate-300 cursor-not-allowed'
+                    : (isStart || isEnd) ? accentCls.selected
+                    : inRange ? accentCls.inRange
+                    : `hover:bg-slate-100 ${baseColor} cursor-pointer`;
+          return (
+            <button key={i} disabled={disabled}
+              onClick={() => !disabled && onSelect(ymd)}
+              onMouseEnter={() => !disabled && onHover && onHover(ymd)}
+              className={`w-8 h-8 text-xs rounded num ${cls}`}>
+              {d}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function TaskViewCard({ num, task, value, accent, targets, procKey }) {
   // KPI 상태 매핑 (대시보드용)
   const kpiKeyMap = {
@@ -3137,21 +3301,10 @@ function ProductionSummaryTab({ data }) {
               ))}
             </div>
             {period === 'range' && (
-              <Fragment>
-                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-                  <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">시작</span>
-                  <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-                    min={dataRange.min} max={dataRange.max}
-                    className="px-1 py-0.5 bg-transparent text-sm num focus:outline-none" />
-                </div>
-                <span className="text-slate-400 text-sm">~</span>
-                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-                  <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">종료</span>
-                  <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
-                    min={dataRange.min} max={dataRange.max}
-                    className="px-1 py-0.5 bg-transparent text-sm num focus:outline-none" />
-                </div>
-              </Fragment>
+              <DateRangePicker
+                startDate={startDate} endDate={endDate}
+                onChange={(s, e) => { setStartDate(s); setEndDate(e); }}
+                min={dataRange.min} max={dataRange.max} />
             )}
           </div>
         </div>
@@ -3675,21 +3828,10 @@ function ErpReportTab({ data, onSaveErp }) {
               </select>
             )}
             {period === 'range' && (
-              <Fragment>
-                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-                  <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">시작</span>
-                  <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-                    min={dataRange.min} max={dataRange.max}
-                    className="px-1 py-0.5 bg-transparent text-sm num focus:outline-none" />
-                </div>
-                <span className="text-slate-400 text-sm">~</span>
-                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-                  <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">종료</span>
-                  <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
-                    min={dataRange.min} max={dataRange.max}
-                    className="px-1 py-0.5 bg-transparent text-sm num focus:outline-none" />
-                </div>
-              </Fragment>
+              <DateRangePicker
+                startDate={startDate} endDate={endDate}
+                onChange={(s, e) => { setStartDate(s); setEndDate(e); }}
+                min={dataRange.min} max={dataRange.max} />
             )}
             <div className="h-6 w-px bg-slate-200 mx-1"></div>
             <input ref={fileRef} type="file" accept=".xls,.xlsx" className="hidden"
@@ -4246,21 +4388,10 @@ function QualitySummaryTab({ data }) {
               ))}
             </div>
             {period === 'range' && (
-              <Fragment>
-                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-                  <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">시작</span>
-                  <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-                    min={dataRange.min} max={dataRange.max}
-                    className="px-1 py-0.5 bg-transparent text-sm num focus:outline-none" />
-                </div>
-                <span className="text-slate-400 text-sm">~</span>
-                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-                  <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">종료</span>
-                  <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
-                    min={dataRange.min} max={dataRange.max}
-                    className="px-1 py-0.5 bg-transparent text-sm num focus:outline-none" />
-                </div>
-              </Fragment>
+              <DateRangePicker
+                startDate={startDate} endDate={endDate}
+                onChange={(s, e) => { setStartDate(s); setEndDate(e); }}
+                min={dataRange.min} max={dataRange.max} />
             )}
           </div>
         </div>
@@ -4777,21 +4908,10 @@ function OutsourcingTab({ data }) {
               </select>
             )}
             {periodMode === 'range' && (
-              <Fragment>
-                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-                  <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">시작</span>
-                  <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-                    min={dataRange.min} max={dataRange.max}
-                    className="px-1 py-0.5 bg-transparent text-sm num focus:outline-none" />
-                </div>
-                <span className="text-slate-400 text-sm">~</span>
-                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-                  <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">종료</span>
-                  <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
-                    min={dataRange.min} max={dataRange.max}
-                    className="px-1 py-0.5 bg-transparent text-sm num focus:outline-none" />
-                </div>
-              </Fragment>
+              <DateRangePicker
+                startDate={startDate} endDate={endDate}
+                onChange={(s, e) => { setStartDate(s); setEndDate(e); }}
+                min={dataRange.min} max={dataRange.max} />
             )}
           </div>
         </div>
