@@ -2801,38 +2801,58 @@ function ProductionPage({ data, onSave, onSaveTrash, onSaveJournal }) {
 
   const findExisting = (list, dateKey) => (list || []).find(e => e.date === dateKey);
 
-  // 일자 변경 / 데이터 변경 시 — 그 일자 entry 있으면 로드, 없으면 같은 주의 가장 최근 entry에서 progressThis만 prefill
+  // 일자 변경 / 데이터 변경 시 — 그 일자 entry 로드 + 비어있는 task3/progressThis는 같은 주 다른 entry에서 carry-forward
   useEffect(() => {
     const ex = findExisting(data.production, selectedDate);
-    if (ex && ex.tasks) {
-      setTasks({ ...emptyTasks(), ...ex.tasks });
-      return;
-    }
-    // 같은 주의 이전 일자 entry 중 가장 최근에서 progressThis만 carry-forward
+    const baseTasks = ex && ex.tasks ? { ...emptyTasks(), ...ex.tasks } : emptyTasks();
+
+    // 같은 주의 다른 일자 entries (자기 자신 제외, 최신 우선)
     const selIso = getISOWeek(selectedDate);
-    const sameWeekPrev = (data.production || [])
-      .filter(e => e.date && e.date < selectedDate)
+    const sameWeekOthers = (data.production || [])
+      .filter(e => e.date && e.date !== selectedDate)
       .filter(e => {
         const w = getISOWeek(e.date);
         return w.year === selIso.year && w.week === selIso.week;
       })
       .sort((a, b) => a.date < b.date ? 1 : -1);
-    if (!sameWeekPrev.length) { setTasks(emptyTasks()); return; }
-    const src = sameWeekPrev[0].tasks || {};
-    const prefilled = emptyTasks();
-    Object.keys(prefilled).forEach(procKey => {
-      Object.keys(prefilled[procKey] || {}).forEach(taskKey => {
-        const srcTask = src[procKey]?.[taskKey];
-        if (!srcTask) return;
-        // task3 (현장 지원 능력)은 입력값까지 통째로 carry-forward, 그 외는 progressThis만
-        if (taskKey === 'task3') {
-          prefilled[procKey][taskKey] = { ...srcTask };
-        } else if (srcTask.progressThis) {
-          prefilled[procKey][taskKey] = { progressThis: srcTask.progressThis };
+
+    // 새 일자(저장 안 됨)면 이전 일자만, 기존 일자면 같은 주 모든 다른 일자에서 fallback
+    const candidates = ex ? sameWeekOthers : sameWeekOthers.filter(e => e.date < selectedDate);
+
+    if (!candidates.length) { setTasks(baseTasks); return; }
+
+    const hasInputField = (taskObj) =>
+      taskObj && Object.keys(taskObj).some(k =>
+        k !== 'progressThis' && taskObj[k] !== '' && taskObj[k] !== null && taskObj[k] !== undefined
+      );
+
+    Object.keys(baseTasks).forEach(procKey => {
+      Object.keys(baseTasks[procKey] || {}).forEach(taskKey => {
+        const cur = baseTasks[procKey][taskKey] || {};
+        // task3 (현장 지원 능력): 입력값이 비어있으면 같은 주 다른 entry에서 끌어옴
+        if (taskKey === 'task3' && !hasInputField(cur)) {
+          for (const other of candidates) {
+            const src = other.tasks?.[procKey]?.task3;
+            if (hasInputField(src)) {
+              baseTasks[procKey][taskKey] = { ...src, ...(cur.progressThis ? { progressThis: cur.progressThis } : {}) };
+              break;
+            }
+          }
+        }
+        // progressThis: 현재 비어있으면 같은 주 다른 entry에서 끌어옴
+        if (!baseTasks[procKey][taskKey]?.progressThis) {
+          for (const other of candidates) {
+            const src = other.tasks?.[procKey]?.[taskKey];
+            if (src?.progressThis) {
+              baseTasks[procKey][taskKey] = { ...(baseTasks[procKey][taskKey] || {}), progressThis: src.progressThis };
+              break;
+            }
+          }
         }
       });
     });
-    setTasks(prefilled);
+
+    setTasks(baseTasks);
   }, [selectedDate, data.production]);
 
   const existing = findExisting(data.production, selectedDate);
