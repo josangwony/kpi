@@ -2823,7 +2823,11 @@ function ProductionPage({ data, onSave, onSaveTrash, onSaveJournal }) {
     Object.keys(prefilled).forEach(procKey => {
       Object.keys(prefilled[procKey] || {}).forEach(taskKey => {
         const srcTask = src[procKey]?.[taskKey];
-        if (srcTask && srcTask.progressThis) {
+        if (!srcTask) return;
+        // task3 (현장 지원 능력)은 입력값까지 통째로 carry-forward, 그 외는 progressThis만
+        if (taskKey === 'task3') {
+          prefilled[procKey][taskKey] = { ...srcTask };
+        } else if (srcTask.progressThis) {
           prefilled[procKey][taskKey] = { progressThis: srcTask.progressThis };
         }
       });
