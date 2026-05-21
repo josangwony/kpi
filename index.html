@@ -1769,19 +1769,6 @@ function KpiHeroCard({ kpi, cur, prev, targets, delay = 0 }) {
   const proc = PROC_BY_KEY[kpi.process] || { label: kpi.procLabel || '품질', color: kpi.color, soft: kpi.soft || '#F1F5F9' };
   const t = (targets && targets[kpi.key]) || DEFAULT_TARGETS[kpi.key] || { target: kpi.target };
 
-  // 목표 대비 % (KPI 방향성 반영)
-  const achPct = (() => {
-    if (!hasCur || !t || !t.target) return null;
-    const v = Number(cur), tg = Number(t.target);
-    if (kpi.higher) return Math.round(v / tg * 100);
-    if (v <= 0) return 200;
-    return Math.round(tg / v * 100);
-  })();
-  const achColor = achPct === null ? '#94A3B8'
-                  : achPct >= 100 ? '#10B981'
-                  : achPct >= 80  ? '#F59E0B'
-                  : '#F43F5E';
-
   let trendNode = null;
   if (delta !== null) {
     const improved = kpi.higher ? delta > 0 : delta < 0;
@@ -1837,9 +1824,6 @@ function KpiHeroCard({ kpi, cur, prev, targets, delay = 0 }) {
           <span className="text-slate-500">
             목표 <span className="text-slate-800 font-bold num">{kpi.isKRW ? fmtKRW(t.target) : `${fmtNumber(t.target, kpi.decimals)}${kpi.unit}`}</span>
           </span>
-          {achPct !== null && (
-            <span className="num font-bold" style={{ color: achColor }}>{achPct}%</span>
-          )}
         </div>
         {trendNode}
       </div>
