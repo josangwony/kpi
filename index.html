@@ -3613,7 +3613,9 @@ function ErpReportTab({ data, onSaveErp }) {
         inputQty:         { '2F': null, '4F': null, 'OUT': null },
         records: groups.get(date).map((r, i) => ({ ...r, _id: crypto.randomUUID(), no: r.no || (i+1) })),
       }));
-      const filtered = reports.filter(r => !newEntries.find(e => e.reportDate === r.reportDate && e.filename === r.filename));
+      // 같은 발생일 데이터는 새 파일로 통째로 대체 (파일명 무관)
+      const newDates = new Set(newEntries.map(e => e.reportDate));
+      const filtered = reports.filter(r => !newDates.has(r.reportDate));
       onSaveErp([...filtered, ...newEntries]);
       if (dates.length === 1) toast(`${dates[0]} · ${records.length}건 저장 완료`, 'success');
       else                    toast(`${dates.length}개 일자 자동 분리 · 총 ${records.length}건 저장 완료`, 'success');
