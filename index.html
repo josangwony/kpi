@@ -1149,16 +1149,18 @@ function PillButton({ active, onClick, children, color = 'slate' }) {
    12) DASHBOARD
    ============================================================ */
 function DashboardPage({ data }) {
-  const [period, setPeriod] = useState('week'); // 'week' | 'month' | 'all'
+  const [period, setPeriod] = useState('day'); // 'day' | 'week' | 'month' | 'all'
   const targets = data.targets || DEFAULT_TARGETS;
   const qualityTargets = data.qualityTargets || DEFAULT_QUALITY_TARGETS;
 
   const today = todayYMD();
+  const yesterday = ymdShift(today, -1);
   const todayIso = getISOWeek(today);
   const thisWeekKey  = `${todayIso.year}-W${pad2(todayIso.week)}`;
   const thisMonthKey = today.slice(0, 7);
 
-  // 사용자가 선택한 주/월 (기본 = 이번 주/이번 달)
+  // 사용자가 선택한 일/주/월 (기본 일별=어제 — 오늘은 퇴근 후 입력되는 패턴)
+  const [selectedDay, setSelectedDay] = useState(yesterday);
   const [selectedWeek, setSelectedWeek] = useState(thisWeekKey);
   const [selectedMonth, setSelectedMonth] = useState(thisMonthKey);
 
@@ -1166,12 +1168,14 @@ function DashboardPage({ data }) {
   const prodSorted = useMemo(() => [...(data.production||[])].sort((a,b)=> a.date < b.date ? -1 : 1), [data.production]);
   const erpSorted  = useMemo(() => [...(data.erpReports||[])].sort((a,b)=> a.reportDate < b.reportDate ? -1 : 1), [data.erpReports]);
 
-  // 사용 가능한 주/월 옵션 (production + erpReports 둘 다 기준, 최신순)
-  const { availableWeeks, availableMonths } = useMemo(() => {
+  // 사용 가능한 일/주/월 옵션 (production + erpReports 둘 다 기준, 최신순)
+  const { availableDays, availableWeeks, availableMonths } = useMemo(() => {
+    const days   = new Set();
     const weeks  = new Map();
     const months = new Map();
     const addDate = (ymd) => {
       if (!ymd) return;
+      days.add(ymd);
       const w = getISOWeek(ymd);
       const wk = `${w.year}-W${pad2(w.week)}`;
       if (!weeks.has(wk)) {
@@ -1183,15 +1187,16 @@ function DashboardPage({ data }) {
     };
     prodSorted.forEach(e => addDate(e.date));
     erpSorted.forEach(r => addDate(r.reportDate));
-    // 이번 주/달도 항상 포함
+    // 오늘·이번 주·이번 달도 항상 포함
     addDate(today);
     return {
+      availableDays:   [...days].sort().reverse(),
       availableWeeks:  [...weeks.entries()].sort((a,b) => a[0] < b[0] ? 1 : -1),
       availableMonths: [...months.entries()].sort((a,b) => a[0] < b[0] ? 1 : -1),
     };
   }, [prodSorted, erpSorted, today]);
 
-  const selectedWeekLabel = availableWeeks.find(([k]) => k === selectedWeek)?.[1] || selectedWeek;
+  const selectedWeekLabel  = availableWeeks.find(([k]) => k === selectedWeek)?.[1] || selectedWeek;
   const selectedMonthLabel = availableMonths.find(([k]) => k === selectedMonth)?.[1] || selectedMonth;
 
   const safeAvg = (arr) => {
@@ -1199,7 +1204,9 @@ function DashboardPage({ data }) {
     return xs.length ? xs.reduce((a,b) => a+b, 0) / xs.length : null;
   };
 
-  // 이전 주/월 키 — 선택된 주/월 기준
+  // 이전 일/주/월 키 — 선택된 일/주/월 기준
+  const prevDayKey = useMemo(() => ymdShift(selectedDay, -1), [selectedDay]);
+
   const prevWeekKey = useMemo(() => {
     const [yStr, wStr] = selectedWeek.split('-W');
     const monday = isoWeekToMonday(Number(yStr), Number(wStr));
@@ -1214,33 +1221,38 @@ function DashboardPage({ data }) {
     return m === 1 ? `${y-1}-12` : `${y}-${pad2(m-1)}`;
   }, [selectedMonth]);
 
-  const filterProd = (key) => {
-    if (period === 'week') {
+  const filterProd = (mode, key) => {
+    if (mode === 'day')   return prodSorted.filter(e => e.date === key);
+    if (mode === 'week') {
       return prodSorted.filter(e => (e.weekKey === key) || (e.year === Number(key.split('-W')[0]) && e.week === Number(key.split('-W')[1])));
     }
-    if (period === 'month') return prodSorted.filter(e => (e.date || '').startsWith(key));
+    if (mode === 'month') return prodSorted.filter(e => (e.date || '').startsWith(key));
     return prodSorted; // all
   };
 
   const prodCurrent = useMemo(() => {
-    const entries = period === 'week' ? filterProd(selectedWeek)
-                  : period === 'month' ? filterProd(selectedMonth)
+    const entries = period === 'day'   ? filterProd('day',   selectedDay)
+                  : period === 'week'  ? filterProd('week',  selectedWeek)
+                  : period === 'month' ? filterProd('month', selectedMonth)
                   : prodSorted;
     const values = Object.fromEntries(KPI_DEFS.map(k => [k.key, safeAvg(entries.map(e => e[k.key]))]));
     const latest = entries[entries.length - 1] || null;
     return { entries, values, count: entries.length, latestTasks: latest?.tasks || emptyTasks() };
-  }, [prodSorted, period, selectedWeek, selectedMonth]);
+  }, [prodSorted, period, selectedDay, selectedWeek, selectedMonth]);
 
   const prodPrev = useMemo(() => {
     if (period === 'all') return null;
-    const entries = period === 'week' ? filterProd(prevWeekKey) : filterProd(prevMonthKey);
+    const entries = period === 'day'  ? filterProd('day',  prevDayKey)
+                  : period === 'week' ? filterProd('week', prevWeekKey)
+                  :                     filterProd('month', prevMonthKey);
     if (!entries.length) return null;
     return { values: Object.fromEntries(KPI_DEFS.map(k => [k.key, safeAvg(entries.map(e => e[k.key]))])) };
-  }, [prodSorted, period, prevWeekKey, prevMonthKey]);
+  }, [prodSorted, period, prevDayKey, prevWeekKey, prevMonthKey]);
 
   // ===== ERP (품질) =====
   const filterErp = (mode, key) => {
-    if (mode === 'week') return erpSorted.filter(r => {
+    if (mode === 'day')   return erpSorted.filter(r => r.reportDate === key);
+    if (mode === 'week')  return erpSorted.filter(r => {
       if (!r.reportDate) return false;
       const w = getISOWeek(r.reportDate);
       return `${w.year}-W${pad2(w.week)}` === key;
@@ -1273,18 +1285,21 @@ function DashboardPage({ data }) {
   };
 
   const erpCurrent = useMemo(() => {
-    const reports = period === 'week' ? filterErp('week', selectedWeek)
+    const reports = period === 'day'   ? filterErp('day',   selectedDay)
+                  : period === 'week'  ? filterErp('week',  selectedWeek)
                   : period === 'month' ? filterErp('month', selectedMonth)
                   : erpSorted;
     return aggErp(reports);
-  }, [erpSorted, period, selectedWeek, selectedMonth]);
+  }, [erpSorted, period, selectedDay, selectedWeek, selectedMonth]);
 
   const erpPrev = useMemo(() => {
     if (period === 'all') return null;
-    const reports = period === 'week' ? filterErp('week', prevWeekKey) : filterErp('month', prevMonthKey);
+    const reports = period === 'day'  ? filterErp('day',  prevDayKey)
+                  : period === 'week' ? filterErp('week', prevWeekKey)
+                  :                     filterErp('month', prevMonthKey);
     if (!reports.length) return null;
     return aggErp(reports);
-  }, [erpSorted, period, prevWeekKey, prevMonthKey]);
+  }, [erpSorted, period, prevDayKey, prevWeekKey, prevMonthKey]);
 
   // 월 누적 (품질 월 목표 대비) — 선택된 월 기준 (또는 전체이면 이번 달)
   const monthForCum = period === 'month' ? selectedMonth : thisMonthKey;
@@ -1305,11 +1320,17 @@ function DashboardPage({ data }) {
   }, [erpSorted, monthForCum, prevMonthForCum]);
 
   // 라벨
-  const periodLabel = period === 'week'  ? selectedWeekLabel
+  const periodLabel = period === 'day'   ? selectedDay
+                    : period === 'week'  ? selectedWeekLabel
                     : period === 'month' ? selectedMonthLabel
                     :                      '전체 기간';
   const periodSub = (() => {
     const fmtMD = (ymd) => `${Number(ymd.slice(5,7))}/${Number(ymd.slice(8,10))}`;
+    if (period === 'day') {
+      const dow = ['일','월','화','수','목','금','토'][parseYMD(selectedDay).getDay()];
+      const tag = selectedDay === today ? ' · 오늘' : selectedDay === yesterday ? ' · 어제' : '';
+      return `${dow}요일${tag}`;
+    }
     if (period === 'week') {
       const [yStr, wStr] = selectedWeek.split('-W');
       const monday = isoWeekToMonday(Number(yStr), Number(wStr));
@@ -1351,6 +1372,7 @@ function DashboardPage({ data }) {
         <div className="flex items-center gap-2 flex-wrap">
           <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
             {[
+              { v:'day',   l:'일별' },
               { v:'week',  l:'주별' },
               { v:'month', l:'월별' },
               { v:'all',   l:'전체' },
@@ -1362,6 +1384,14 @@ function DashboardPage({ data }) {
               </button>
             ))}
           </div>
+          {period === 'day' && (
+            <DateRangePicker mode="single"
+              startDate={selectedDay}
+              onChange={(d) => d && setSelectedDay(d)}
+              min={availableDays.length ? availableDays[availableDays.length - 1] : undefined}
+              max={today}
+              accent="indigo" />
+          )}
           {period === 'week' && availableWeeks.length > 0 && (
             <select value={selectedWeek} onChange={e => setSelectedWeek(e.target.value)}
               className="px-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300">
@@ -1525,7 +1555,7 @@ function EmptyHint({ iconName = 'trending', msg }) {
 /* ============================================================
    DateRangePicker — 듀얼 캘린더 popover (기간 선택 통합)
    ============================================================ */
-function DateRangePicker({ startDate, endDate, onChange, min, max, accent = 'rose' }) {
+function DateRangePicker({ startDate, endDate, onChange, min, max, accent = 'rose', mode = 'range' }) {
   const [open, setOpen] = useState(false);
   const [pickingEnd, setPickingEnd] = useState(false);
   const [hoverDate, setHoverDate] = useState(null);
@@ -1572,6 +1602,12 @@ function DateRangePicker({ startDate, endDate, onChange, min, max, accent = 'ros
   const handleSelect = (ymd) => {
     if (min && ymd < min) return;
     if (max && ymd > max) return;
+    // 단일 날짜 선택 모드: 한 번 클릭으로 끝
+    if (mode === 'single') {
+      onChange(ymd, null);
+      setOpen(false);
+      return;
+    }
     if (!pickingEnd) {
       onChange(ymd, '');
       setPickingEnd(true);
@@ -1590,9 +1626,11 @@ function DateRangePicker({ startDate, endDate, onChange, min, max, accent = 'ros
   };
 
   const accentRing  = accent === 'rose' ? 'focus:ring-rose-300' : 'focus:ring-indigo-300';
-  const triggerText = (startDate && endDate)
-    ? `${startDate} ~ ${endDate}`
-    : (startDate ? `${startDate} ~ 종료일 선택` : '기간 선택');
+  const triggerText = mode === 'single'
+    ? (startDate || '날짜 선택')
+    : (startDate && endDate)
+      ? `${startDate} ~ ${endDate}`
+      : (startDate ? `${startDate} ~ 종료일 선택` : '기간 선택');
 
   return (
     <div className="relative">
@@ -1619,7 +1657,7 @@ function DateRangePicker({ startDate, endDate, onChange, min, max, accent = 'ros
             onSelect={handleSelect} onHover={setHoverDate} min={min} max={max} accent={accent} />
           {/* 상태 안내 */}
           <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-            <span>{pickingEnd ? '종료일을 선택하세요' : '시작일을 선택하세요'}</span>
+            <span>{mode === 'single' ? '날짜를 선택하세요' : (pickingEnd ? '종료일을 선택하세요' : '시작일을 선택하세요')}</span>
             <button onClick={() => { setOpen(false); setPickingEnd(false); setHoverDate(null); }}
               className="text-slate-400 hover:text-slate-600">닫기</button>
           </div>
@@ -2754,28 +2792,46 @@ function RecentQualityTable({ entries }) {
 function ProductionPage({ data, onSave, onSaveTrash, onSaveJournal }) {
   const toast = useToast();
   const [tab, setTab] = useState('input');
-  const todayIso = getISOWeek(todayYMD());
-  const [year, setYear] = useState(todayIso.year);
-  const [week, setWeek] = useState(todayIso.week);
-  const monthOfWeek = useMemo(() => isoWeekToMonthLabel(year, week), [year, week]);
+  const today = todayYMD();
+  const yesterday = ymdShift(today, -1);
+  // 기본 입력 일자 = 어제 (오늘 데이터는 다음날 입력되는 운영 패턴)
+  const [selectedDate, setSelectedDate] = useState(yesterday);
 
   const [tasks, setTasks] = useState(() => emptyTasks());
-  const weekKey = `${year}-W${pad2(week)}`;
-  const weekMondayDate = useMemo(() => isoWeekToMonday(year, week), [year, week]);
-  const weekMondayYMD = `${weekMondayDate.getUTCFullYear()}-${pad2(weekMondayDate.getUTCMonth()+1)}-${pad2(weekMondayDate.getUTCDate())}`;
 
-  const findExisting = (list) => (list || []).find(e =>
-    (e.weekKey && e.weekKey === weekKey) ||
-    (e.year === year && e.week === week) ||
-    (e.date === weekMondayYMD)
-  );
+  const findExisting = (list, dateKey) => (list || []).find(e => e.date === dateKey);
 
+  // 일자 변경 / 데이터 변경 시 — 그 일자 entry 있으면 로드, 없으면 같은 주의 가장 최근 entry에서 progressThis만 prefill
   useEffect(() => {
-    const ex = findExisting(data.production);
-    setTasks(ex && ex.tasks ? { ...emptyTasks(), ...ex.tasks } : emptyTasks());
-  }, [year, week, data.production]);
+    const ex = findExisting(data.production, selectedDate);
+    if (ex && ex.tasks) {
+      setTasks({ ...emptyTasks(), ...ex.tasks });
+      return;
+    }
+    // 같은 주의 이전 일자 entry 중 가장 최근에서 progressThis만 carry-forward
+    const selIso = getISOWeek(selectedDate);
+    const sameWeekPrev = (data.production || [])
+      .filter(e => e.date && e.date < selectedDate)
+      .filter(e => {
+        const w = getISOWeek(e.date);
+        return w.year === selIso.year && w.week === selIso.week;
+      })
+      .sort((a, b) => a.date < b.date ? 1 : -1);
+    if (!sameWeekPrev.length) { setTasks(emptyTasks()); return; }
+    const src = sameWeekPrev[0].tasks || {};
+    const prefilled = emptyTasks();
+    Object.keys(prefilled).forEach(procKey => {
+      Object.keys(prefilled[procKey] || {}).forEach(taskKey => {
+        const srcTask = src[procKey]?.[taskKey];
+        if (srcTask && srcTask.progressThis) {
+          prefilled[procKey][taskKey] = { progressThis: srcTask.progressThis };
+        }
+      });
+    });
+    setTasks(prefilled);
+  }, [selectedDate, data.production]);
 
-  const existing = findExisting(data.production);
+  const existing = findExisting(data.production, selectedDate);
 
   const updateTask = (procKey, taskKey, field, value) => {
     setTasks(prev => ({
@@ -2790,10 +2846,12 @@ function ProductionPage({ data, onSave, onSaveTrash, onSaveJournal }) {
   const handleSave = () => {
     const flat = tasksToFlatKpis(tasks);
     const owner = localStorage.getItem('kpi_owner_prod') || '';
+    const selIso = getISOWeek(selectedDate);
     const entry = {
       id: existing?.id || crypto.randomUUID(),
-      year, week, weekKey,
-      date: weekMondayYMD,
+      date: selectedDate,
+      year: selIso.year, week: selIso.week,
+      weekKey: `${selIso.year}-W${pad2(selIso.week)}`,
       owner,
       tasks,
       ...flat,
@@ -2801,11 +2859,7 @@ function ProductionPage({ data, onSave, onSaveTrash, onSaveJournal }) {
       updatedAt: new Date().toISOString(),
     };
     let next;
-    const idx = (data.production || []).findIndex(e =>
-      (e.weekKey && e.weekKey === weekKey) ||
-      (e.year === year && e.week === week) ||
-      (e.date === weekMondayYMD)
-    );
+    const idx = (data.production || []).findIndex(e => e.date === selectedDate);
     if (idx >= 0) { next = [...data.production]; next[idx] = entry; }
     else          { next = [...(data.production || []), entry]; }
     onSave(next);
@@ -2816,7 +2870,7 @@ function ProductionPage({ data, onSave, onSaveTrash, onSaveJournal }) {
     <div className="space-y-5">
       <div className="flex items-center justify-between gap-2 flex-wrap animate-fade-up">
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-1.5 inline-flex gap-1 flex-wrap">
-          <ProductionTabBtn active={tab==='input'}   onClick={() => setTab('input')}   icon="pencil"    label="주간 입력" />
+          <ProductionTabBtn active={tab==='input'}   onClick={() => setTab('input')}   icon="pencil"    label="일간 입력" />
           <ProductionTabBtn active={tab==='journal'} onClick={() => setTab('journal')} icon="notebook"  label="주간 기록" />
           <ProductionTabBtn active={tab==='summary'} onClick={() => setTab('summary')} icon="dashboard" label="종합 지표" />
           <ProductionTabBtn active={tab==='history'} onClick={() => setTab('history')} icon="upload"    label="작성 이력" />
@@ -2824,35 +2878,12 @@ function ProductionPage({ data, onSave, onSaveTrash, onSaveJournal }) {
         {tab === 'input' && (
           <div className="flex items-center gap-2 flex-wrap">
             <div className="inline-flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5 shadow-sm">
-              <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">입력 주차</span>
-              <select value={monthOfWeek.year} onChange={e => {
-                  const y = Number(e.target.value);
-                  const maxW = getWeeksInMonth(y, monthOfWeek.month);
-                  const w = Math.min(monthOfWeek.weekOfMonth, maxW);
-                  const iso = monthWeekToIso(y, monthOfWeek.month, w);
-                  setYear(iso.year); setWeek(iso.week);
-                }}
-                className="px-1.5 py-0.5 text-xs num bg-transparent focus:outline-none">
-                {[2024, 2025, 2026, 2027, 2028].map(y => <option key={y} value={y}>{y}년</option>)}
-              </select>
-              <select value={monthOfWeek.month} onChange={e => {
-                  const m = Number(e.target.value);
-                  const maxW = getWeeksInMonth(monthOfWeek.year, m);
-                  const w = Math.min(monthOfWeek.weekOfMonth, maxW);
-                  const iso = monthWeekToIso(monthOfWeek.year, m, w);
-                  setYear(iso.year); setWeek(iso.week);
-                }}
-                className="px-1.5 py-0.5 text-xs num bg-transparent focus:outline-none">
-                {Array.from({length:12}, (_, i) => i+1).map(m => <option key={m} value={m}>{m}월</option>)}
-              </select>
-              <select value={monthOfWeek.weekOfMonth} onChange={e => {
-                  const w = Number(e.target.value);
-                  const iso = monthWeekToIso(monthOfWeek.year, monthOfWeek.month, w);
-                  setYear(iso.year); setWeek(iso.week);
-                }}
-                className="px-1.5 py-0.5 text-xs num bg-transparent focus:outline-none">
-                {Array.from({length: getWeeksInMonth(monthOfWeek.year, monthOfWeek.month)}, (_, i) => i+1).map(w => <option key={w} value={w}>{w}주차</option>)}
-              </select>
+              <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">입력 일자</span>
+              <DateRangePicker mode="single"
+                startDate={selectedDate}
+                onChange={(d) => d && setSelectedDate(d)}
+                max={today}
+                accent="indigo" />
             </div>
             <button onClick={handleSave}
               className="px-4 py-2 rounded-lg text-xs font-semibold bg-gradient-to-r from-sky-500 to-cyan-500 text-white hover:from-sky-600 hover:to-cyan-600 shadow-md shadow-sky-500/20 flex items-center gap-1.5">
@@ -3148,17 +3179,32 @@ function JournalCell({ owner, value, onCommit }) {
    22-B) PRODUCTION SUMMARY TAB — 종합 지표 (주간 기반)
    ============================================================ */
 function aggregateProductionByPeriod(entries, period, opts = {}) {
-  // 이번 주: 오늘 기준 ISO 주차의 entry만
+  // 단일 일자: 선택된 일자의 entry (없으면 빈 배열)
+  if (period === 'day') {
+    const targetDate = opts.day || todayYMD();
+    const filtered = (entries || []).filter(e => e.date === targetDate);
+    if (!filtered.length) return [];
+    const e = filtered[0];
+    return [{
+      key: e.date,
+      label: ymdToLabel(e.date),
+      ymd: e.date,
+      values: Object.fromEntries(KPI_DEFS.map(k => [k.key, e[k.key] ?? null])),
+      entries: filtered,
+      count: filtered.length,
+    }];
+  }
+  // 이번 주: 이번 주의 일별 entries 모두 평균
   if (period === 'thisweek') {
     const iso = getISOWeek(todayYMD());
     const wk  = `${iso.year}-W${pad2(iso.week)}`;
     const filtered = (entries || []).filter(e => {
-      const ewk = e.weekKey || (e.year && e.week ? `${e.year}-W${pad2(e.week)}` : null);
-      return ewk === wk;
+      if (!e.date) return false;
+      const w = getISOWeek(e.date);
+      return `${w.year}-W${pad2(w.week)}` === wk;
     });
     if (!filtered.length) return [];
-    const e = filtered[0];
-    const monday = e.date || (() => {
+    const monday = (() => {
       const m = isoWeekToMonday(iso.year, iso.week);
       return `${m.getUTCFullYear()}-${pad2(m.getUTCMonth()+1)}-${pad2(m.getUTCDate())}`;
     })();
@@ -3166,9 +3212,12 @@ function aggregateProductionByPeriod(entries, period, opts = {}) {
       key: wk,
       label: `${iso.year} ${isoWeekToMonthLabel(iso.year, iso.week).month}월 ${isoWeekToMonthLabel(iso.year, iso.week).weekOfMonth}주차`,
       ymd: monday,
-      values: Object.fromEntries(KPI_DEFS.map(k => [k.key, e[k.key] ?? null])),
-      entries: [e],
-      count: 1,
+      values: Object.fromEntries(KPI_DEFS.map(k => {
+        const vals = filtered.map(e => e[k.key]).filter(v => v !== null && v !== undefined && v !== '');
+        return [k.key, vals.length ? avg(vals) : null];
+      })),
+      entries: filtered,
+      count: filtered.length,
     }];
   }
   // 전체: 모든 데이터 평균
@@ -3205,7 +3254,10 @@ function aggregateProductionByPeriod(entries, period, opts = {}) {
 function ProductionSummaryTab({ data }) {
   const reports = data.production || [];
   const targets = data.targets || DEFAULT_TARGETS;
-  const [period, setPeriod] = useState('thisweek');
+  const today = todayYMD();
+  const yesterday = ymdShift(today, -1);
+  const [period, setPeriod] = useState('day');
+  const [selectedDay, setSelectedDay] = useState(yesterday);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate]     = useState('');
 
@@ -3221,28 +3273,27 @@ function ProductionSummaryTab({ data }) {
 
   const [effStart, effEnd] = (startDate && endDate && startDate > endDate) ? [endDate, startDate] : [startDate, endDate];
 
-  const grouped = useMemo(() => aggregateProductionByPeriod(reports, period, { start: effStart, end: effEnd }), [reports, period, effStart, effEnd]);
+  const grouped = useMemo(() => aggregateProductionByPeriod(reports, period, { start: effStart, end: effEnd, day: selectedDay }), [reports, period, effStart, effEnd, selectedDay]);
 
-  // 차트용 데이터 — 전체일 때는 주별 grouping으로 풀어서
+  // 차트용 데이터 — 일별/전체는 주별 grouping, 그 외는 grouped 그대로
   const chartGrouped = useMemo(() => {
-    if (period !== 'all') return grouped;
-    return aggregateProduction(reports, 'week');
+    if (period === 'day' || period === 'all') return aggregateProduction(reports, 'week');
+    return grouped;
   }, [grouped, reports, period]);
 
   const latestAgg = grouped[grouped.length - 1] || null;
   const prevAgg   = grouped[grouped.length - 2] || null;
 
-  const periodLabel = period === 'thisweek' ? '이번 주'
+  const periodLabel = period === 'day' ? '일별'
                     : period === 'week' ? '주별'
                     : period === 'month' ? '월별'
                     : period === 'range' ? '기간'
                     : '전체';
 
   const periodMetaLabel = (() => {
-    if (period === 'thisweek') {
-      const iso = getISOWeek(todayYMD());
-      const ml  = isoWeekToMonthLabel(iso.year, iso.week);
-      return `이번 주 · ${ml.year} ${ml.month}월 ${ml.weekOfMonth}주차`;
+    if (period === 'day') {
+      const tag = selectedDay === today ? ' · 오늘' : selectedDay === yesterday ? ' · 어제' : '';
+      return `${selectedDay}${tag}`;
     }
     if (period === 'week')  return '주별 추세';
     if (period === 'month') return '월별 추세';
@@ -3252,13 +3303,9 @@ function ProductionSummaryTab({ data }) {
 
   const periodMetaSub = (() => {
     const fmtMD = (ymd) => `${Number(ymd.slice(5,7))}/${Number(ymd.slice(8,10))}`;
-    if (period === 'thisweek') {
-      const iso = getISOWeek(todayYMD());
-      const monday = isoWeekToMonday(iso.year, iso.week);
-      const sunday = new Date(monday); sunday.setUTCDate(sunday.getUTCDate() + 6);
-      const s = `${monday.getUTCFullYear()}-${pad2(monday.getUTCMonth()+1)}-${pad2(monday.getUTCDate())}`;
-      const e = `${sunday.getUTCFullYear()}-${pad2(sunday.getUTCMonth()+1)}-${pad2(sunday.getUTCDate())}`;
-      return `${fmtMD(s)} ~ ${fmtMD(e)}`;
+    if (period === 'day') {
+      const dow = ['일','월','화','수','목','금','토'][parseYMD(selectedDay).getDay()];
+      return `${dow}요일`;
     }
     if (period === 'range' && effStart && effEnd) {
       const days = Math.round((parseYMD(effEnd) - parseYMD(effStart)) / 86400000) + 1;
@@ -3271,7 +3318,7 @@ function ProductionSummaryTab({ data }) {
   })();
 
   if (!reports.length) {
-    return <EmptyHint iconName="dashboard" msg="저장된 주간 입력이 없습니다. '주간 입력' 탭에서 KPI를 먼저 등록해 주세요." />;
+    return <EmptyHint iconName="dashboard" msg="저장된 일간 입력이 없습니다. '일간 입력' 탭에서 KPI를 먼저 등록해 주세요." />;
   }
 
   return (
@@ -3287,11 +3334,11 @@ function ProductionSummaryTab({ data }) {
           <div className="flex items-center gap-2 flex-wrap">
             <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
               {[
-                { v:'thisweek', l:'이번 주' },
-                { v:'week',     l:'주별' },
-                { v:'month',    l:'월별' },
-                { v:'range',    l:'기간' },
-                { v:'all',      l:'전체' },
+                { v:'day',   l:'일별' },
+                { v:'week',  l:'주별' },
+                { v:'month', l:'월별' },
+                { v:'range', l:'기간' },
+                { v:'all',   l:'전체' },
               ].map(o => (
                 <button key={o.v} onClick={() => setPeriod(o.v)}
                   className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors
@@ -3300,6 +3347,13 @@ function ProductionSummaryTab({ data }) {
                 </button>
               ))}
             </div>
+            {period === 'day' && (
+              <DateRangePicker mode="single"
+                startDate={selectedDay}
+                onChange={(d) => d && setSelectedDay(d)}
+                max={today}
+                accent="indigo" />
+            )}
             {period === 'range' && (
               <DateRangePicker
                 startDate={startDate} endDate={endDate}
@@ -3315,7 +3369,7 @@ function ProductionSummaryTab({ data }) {
       ) : (
         <Fragment>
           {/* KPI 히어로 5개 — latestAgg 기준 */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
             {KPI_DEFS.map((kpi, i) => (
               <KpiHeroCard key={kpi.key} kpi={kpi}
                 cur={latestAgg?.values?.[kpi.key]}
@@ -3357,11 +3411,7 @@ function ProductionHistoryTab({ data, onSave, onSaveTrash }) {
   const trash   = data.productionTrash || [];
 
   const sorted = useMemo(() => {
-    return [...reports].sort((a, b) => {
-      const ka = a.weekKey || (a.year && a.week ? `${a.year}-W${pad2(a.week)}` : '');
-      const kb = b.weekKey || (b.year && b.week ? `${b.year}-W${pad2(b.week)}` : '');
-      return ka < kb ? 1 : -1;
-    });
+    return [...reports].sort((a, b) => (a.date || '') < (b.date || '') ? 1 : -1);
   }, [reports]);
 
   const dates = useMemo(() => reports.map(r => r.date).filter(Boolean).sort(), [reports]);
@@ -3375,8 +3425,7 @@ function ProductionHistoryTab({ data, onSave, onSaveTrash }) {
     const newTrash = [...trash, { ...target, deletedAt: new Date().toISOString() }];
     onSave(next);
     onSaveTrash(newTrash);
-    const wk = target.weekKey || (target.year && target.week ? `${target.year}-W${pad2(target.week)}` : '');
-    toast(`${wk} 기록 삭제됨`, 'info', {
+    toast(`${target.date || ''} 기록 삭제됨`, 'info', {
       action: { label: '되돌리기', onClick: () => restoreOne(target.id) },
       duration: 7000,
     });
@@ -3388,8 +3437,7 @@ function ProductionHistoryTab({ data, onSave, onSaveTrash }) {
     const { deletedAt, ...orig } = t;
     onSave([...(data.production || []).filter(r => r.id !== id), orig]);
     onSaveTrash((data.productionTrash || []).filter(x => x.id !== id));
-    const wk = orig.weekKey || (orig.year && orig.week ? `${orig.year}-W${pad2(orig.week)}` : '');
-    toast(`${wk} 복원 완료`, 'success');
+    toast(`${orig.date || ''} 복원 완료`, 'success');
   };
 
   const permaDeleteOne = (id) => {
@@ -3405,16 +3453,18 @@ function ProductionHistoryTab({ data, onSave, onSaveTrash }) {
   };
 
   if (!reports.length && !trash.length) {
-    return <EmptyHint iconName="pencil" msg="작성된 주간 입력이 없습니다." />;
+    return <EmptyHint iconName="pencil" msg="작성된 일간 입력이 없습니다." />;
   }
+
+  const dayCount = firstDate && lastDate ? Math.round((parseYMD(lastDate)-parseYMD(firstDate))/86400000) + 1 : 0;
 
   return (
     <Fragment>
       {/* 요약 */}
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-        <HistoryStat label="저장된 주차" value={reports.length} unit="건" color="sky" />
+        <HistoryStat label="저장된 일자" value={reports.length} unit="건" color="sky" />
         <HistoryStat label="데이터 범위" textValue={firstDate && lastDate ? (firstDate === lastDate ? firstDate : `${firstDate} ~ ${lastDate}`) : '—'}
-          sub={firstDate && lastDate ? `${Math.round((parseYMD(lastDate)-parseYMD(firstDate))/86400000/7)+1}주차` : ''}
+          sub={dayCount ? `${dayCount}일` : ''}
           color="indigo" />
         <HistoryStat label="휴지통" value={trash.length} unit="건" color="rose" />
       </div>
@@ -3426,8 +3476,8 @@ function ProductionHistoryTab({ data, onSave, onSaveTrash }) {
           <table className="w-full text-xs">
             <thead>
               <tr className="bg-slate-50 text-slate-500">
-                <th className="px-3 py-2 text-left font-semibold whitespace-nowrap">주차</th>
-                <th className="px-3 py-2 text-left font-semibold whitespace-nowrap">월요일</th>
+                <th className="px-3 py-2 text-left font-semibold whitespace-nowrap">일자</th>
+                <th className="px-3 py-2 text-left font-semibold whitespace-nowrap">요일</th>
                 <th className="px-3 py-2 text-left font-semibold">담당자</th>
                 {KPI_DEFS.map(k => (
                   <th key={k.key} className="px-3 py-2 text-center font-semibold whitespace-nowrap">{k.short}</th>
@@ -3441,13 +3491,11 @@ function ProductionHistoryTab({ data, onSave, onSaveTrash }) {
                 <tr><td colSpan={5 + KPI_DEFS.length} className="px-3 py-8 text-center text-slate-400">기록이 없습니다.</td></tr>
               )}
               {sorted.slice(0, 30).map(r => {
-                const wk = r.weekKey || (r.year && r.week ? `${r.year}-W${pad2(r.week)}` : '—');
-                const ml = (r.year && r.week) ? isoWeekToMonthLabel(r.year, r.week) : null;
-                const label = ml ? `${ml.year} ${ml.month}월 ${ml.weekOfMonth}주차` : wk;
+                const dow = r.date ? ['일','월','화','수','목','금','토'][parseYMD(r.date).getDay()] : '';
                 return (
                   <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50/60">
-                    <td className="px-3 py-2 text-slate-700 font-semibold whitespace-nowrap">{label}</td>
-                    <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{r.date || '—'}</td>
+                    <td className="px-3 py-2 text-slate-700 font-semibold whitespace-nowrap">{r.date || '—'}</td>
+                    <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{dow ? `${dow}요일` : '—'}</td>
                     <td className="px-3 py-2 text-slate-700">{r.owner || '—'}</td>
                     {KPI_DEFS.map(k => {
                       const v = r[k.key];
@@ -3492,7 +3540,7 @@ function ProductionHistoryTab({ data, onSave, onSaveTrash }) {
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-slate-50 text-slate-500">
-                  <th className="px-3 py-2 text-left font-semibold">주차</th>
+                  <th className="px-3 py-2 text-left font-semibold">일자</th>
                   <th className="px-3 py-2 text-left font-semibold">담당자</th>
                   <th className="px-3 py-2 text-left font-semibold">삭제 시각</th>
                   <th className="px-3 py-2 text-center font-semibold">자동삭제까지</th>
@@ -3501,9 +3549,7 @@ function ProductionHistoryTab({ data, onSave, onSaveTrash }) {
               </thead>
               <tbody className="num">
                 {[...trash].sort((a,b) => (b.deletedAt || '') < (a.deletedAt || '') ? -1 : 1).map(t => {
-                  const wk = t.weekKey || (t.year && t.week ? `${t.year}-W${pad2(t.week)}` : '—');
-                  const ml = (t.year && t.week) ? isoWeekToMonthLabel(t.year, t.week) : null;
-                  const label = ml ? `${ml.year} ${ml.month}월 ${ml.weekOfMonth}주차` : wk;
+                  const label = t.date || '—';
                   const purgeAt = t.deletedAt ? new Date(t.deletedAt).getTime() + TRASH_RETENTION_MS : null;
                   const remainMs = purgeAt ? purgeAt - Date.now() : null;
                   const remainHours = remainMs !== null ? Math.max(0, remainMs / 3600000) : null;
