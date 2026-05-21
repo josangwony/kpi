@@ -257,15 +257,39 @@ const QUALITY_TARGET_DEFS = [
     color: '#F43F5E', soft: '#FFE4E6', dark: '#BE123C',
   },
   {
+    key: 'weeklyInternalLoss', label: '주간 내부 손실 금액', short: '주 내부 손실',
+    unit: '원', decimals: 0, step: 10000, isKRW: true,
+    color: '#E11D48', soft: '#FFE4E6', dark: '#9F1239',
+  },
+  {
+    key: 'weeklyVendorLoss', label: '주간 외주 손실 금액', short: '주 외주 손실',
+    unit: '원', decimals: 0, step: 10000, isKRW: true,
+    color: '#DB2777', soft: '#FCE7F3', dark: '#9D174D',
+  },
+  {
     key: 'monthlyDefect', label: '월간 부적합 건수', short: '월 부적합',
     unit: '건', decimals: 0, step: 1,
     color: '#A21CAF', soft: '#FAE8FF', dark: '#86198F',
   },
+  {
+    key: 'monthlyInternalLoss', label: '월간 내부 손실 금액', short: '월 내부 손실',
+    unit: '원', decimals: 0, step: 100000, isKRW: true,
+    color: '#86198F', soft: '#FAE8FF', dark: '#701A75',
+  },
+  {
+    key: 'monthlyVendorLoss', label: '월간 외주 손실 금액', short: '월 외주 손실',
+    unit: '원', decimals: 0, step: 100000, isKRW: true,
+    color: '#6B21A8', soft: '#F3E8FF', dark: '#581C87',
+  },
 ];
 const QUALITY_TARGET_BY_KEY = Object.fromEntries(QUALITY_TARGET_DEFS.map(k => [k.key, k]));
 const DEFAULT_QUALITY_TARGETS = {
-  weeklyDefect:  { target: 15, warn: 25, danger: 40 },
-  monthlyDefect: { target: 50, warn: 80, danger: 120 },
+  weeklyDefect:        { target: 15,       warn: 25,       danger: 40 },
+  weeklyInternalLoss:  { target: 1000000,  warn: 2000000,  danger: 3000000 },
+  weeklyVendorLoss:    { target: 500000,   warn: 1500000,  danger: 2500000 },
+  monthlyDefect:       { target: 50,       warn: 80,       danger: 120 },
+  monthlyInternalLoss: { target: 4000000,  warn: 8000000,  danger: 12000000 },
+  monthlyVendorLoss:   { target: 2000000,  warn: 6000000,  danger: 10000000 },
 };
 
 // 휴지통 보관 기간: 7일
@@ -1426,20 +1450,31 @@ function DashboardPage({ data }) {
                   value={erpCurrent.totalQty}
                   prev={erpPrev?.totalQty}
                   unit="건" color="rose" delay={550}
+                  target={period === 'week'  ? qualityTargets.weeklyDefect?.target
+                        : period === 'month' ? qualityTargets.monthlyDefect?.target
+                        : undefined}
+                  targetLabel={period === 'week' ? '주 목표' : period === 'month' ? '월 목표' : ''}
                 />
                 <QualitySummaryCard
-                  label="손실 비용"
-                  value={erpCurrent.totalLoss}
-                  prev={erpPrev?.totalLoss}
+                  label="내부 손실 비용"
+                  value={(erpCurrent.byFloor?.['2F']?.amount || 0) + (erpCurrent.byFloor?.['4F']?.amount || 0)}
+                  prev={erpPrev ? (erpPrev.byFloor?.['2F']?.amount || 0) + (erpPrev.byFloor?.['4F']?.amount || 0) : null}
                   unit="원" isKRW color="fuchsia" delay={610}
+                  target={period === 'week'  ? qualityTargets.weeklyInternalLoss?.target
+                        : period === 'month' ? qualityTargets.monthlyInternalLoss?.target
+                        : undefined}
+                  targetLabel={period === 'week' ? '주 목표' : period === 'month' ? '월 목표' : ''}
                 />
                 <QualitySummaryCard
-                  label="외주 손실 1위"
-                  topReason={erpCurrent.vendors[0] ? { name: erpCurrent.vendors[0].vendor, qty: erpCurrent.vendors[0].qty, loss: erpCurrent.vendors[0].amount } : null}
-                  prev={erpCurrent.vendors[0] && erpPrev?.vendors
-                    ? erpPrev.vendors.find(v => v.vendor === erpCurrent.vendors[0].vendor)?.amount ?? null
-                    : null}
-                  color="pink" delay={670}
+                  label="외주 손실 금액 합계"
+                  value={erpCurrent.vendors.reduce((s, v) => s + (v.amount || 0), 0)}
+                  prev={erpPrev?.vendors ? erpPrev.vendors.reduce((s, v) => s + (v.amount || 0), 0) : null}
+                  vendorList={erpCurrent.vendors.slice(0, 3).map(v => ({ name: v.vendor, qty: v.qty, loss: v.amount }))}
+                  unit="원" isKRW color="pink" delay={670}
+                  target={period === 'week'  ? qualityTargets.weeklyVendorLoss?.target
+                        : period === 'month' ? qualityTargets.monthlyVendorLoss?.target
+                        : undefined}
+                  targetLabel={period === 'week' ? '주 목표' : period === 'month' ? '월 목표' : ''}
                 />
               </div>
 
@@ -2219,16 +2254,16 @@ function MonthlyProgressCard({ qDef, value, prev, target, monthLabel, days, dela
 /* ============================================================
    17) Quality Summary Cards
    ============================================================ */
-function QualitySummaryCard({ label, value, prev, unit, isKRW, color = 'rose', delay, topReason }) {
+function QualitySummaryCard({ label, value, prev, unit, isKRW, color = 'rose', delay, vendorList, target, targetLabel }) {
   const colorMap = {
     rose:    { bg: 'from-rose-500 to-pink-500',     soft: 'bg-rose-50',    text: 'text-rose-700' },
     fuchsia: { bg: 'from-fuchsia-500 to-violet-500', soft: 'bg-fuchsia-50', text: 'text-fuchsia-700' },
     pink:    { bg: 'from-pink-500 to-rose-500',     soft: 'bg-pink-50',    text: 'text-pink-700' },
   }[color] || { bg: 'from-rose-500 to-pink-500', soft: 'bg-rose-50', text: 'text-rose-700' };
 
-  // 일반 카드용 trend (value vs prev)
+  // trend (value vs prev)
   let trend = null;
-  if (value !== undefined && prev !== null && prev !== undefined && !topReason) {
+  if (value !== undefined && prev !== null && prev !== undefined) {
     const delta = Number(value) - Number(prev);
     const improved = delta < 0;
     const cls = delta === 0 ? 'text-slate-500 bg-slate-100' : improved ? 'text-emerald-700 bg-emerald-50' : 'text-rose-700 bg-rose-50';
@@ -2240,20 +2275,6 @@ function QualitySummaryCard({ label, value, prev, unit, isKRW, color = 'rose', d
       </span>
     );
   }
-  // topReason 카드용 trend (topReason.loss vs prev)
-  let topReasonTrend = null;
-  if (topReason && prev !== null && prev !== undefined) {
-    const delta = Number(topReason.loss) - Number(prev);
-    const improved = delta < 0;
-    const cls = delta === 0 ? 'text-slate-500 bg-slate-100' : improved ? 'text-emerald-700 bg-emerald-50' : 'text-rose-700 bg-rose-50';
-    const arrow = delta === 0 ? '→' : improved ? '▼' : '▲';
-    topReasonTrend = (
-      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold ${cls} num`}>
-        <span>{arrow}</span>
-        <span>{fmtKRW(Math.abs(delta))}</span>
-      </span>
-    );
-  }
 
   return (
     <article className="relative bg-white rounded-2xl border border-slate-200 p-5 shadow-sm overflow-hidden animate-fade-up"
@@ -2261,24 +2282,36 @@ function QualitySummaryCard({ label, value, prev, unit, isKRW, color = 'rose', d
       <div className={`absolute -top-10 -right-10 w-36 h-36 rounded-full bg-gradient-to-br ${colorMap.bg} opacity-10 blur-2xl`}></div>
       <div className="relative">
         <div className="text-[11px] text-slate-500 mb-1">{label}</div>
-        {topReason ? (
-          <div>
-            <div className="text-3xl font-extrabold text-slate-900 num mt-1">{fmtKRW(topReason.loss)}</div>
-            <div className="text-sm font-semibold text-slate-700 mt-1.5 truncate" title={topReason.name}>{topReason.name}</div>
-            <div className="text-xs text-slate-500 num mt-0.5">{topReason.qty}건</div>
-            {topReasonTrend && <div className="mt-3">{topReasonTrend}</div>}
+        <div className="flex items-baseline gap-1.5">
+          <div className="text-3xl font-extrabold text-slate-900">
+            {isKRW
+              ? <span className="num">{fmtKRW(value)}</span>
+              : <CountUp value={value} decimals={0} suffix={unit ? ` ${unit}` : ''} />}
           </div>
-        ) : (
-          <Fragment>
-            <div className="flex items-baseline gap-1.5">
-              <div className="text-3xl font-extrabold text-slate-900">
-                {isKRW
-                  ? <span className="num">{fmtKRW(value)}</span>
-                  : <CountUp value={value} decimals={0} suffix={unit ? ` ${unit}` : ''} />}
+        </div>
+        <div className="mt-3">{trend}</div>
+        {target !== undefined && target !== null && (
+          <div className="mt-3 pt-3 border-t border-slate-100 text-xs text-slate-500">
+            {targetLabel || '목표'} <span className="text-slate-800 font-bold num">
+              {isKRW ? fmtKRW(target) : `${Number(target).toLocaleString('ko-KR')}${unit || ''}`}
+            </span>
+          </div>
+        )}
+        {vendorList && vendorList.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-slate-100 space-y-1.5">
+            {vendorList.map((r, i) => (
+              <div key={r.name} className="flex items-center justify-between text-xs gap-2">
+                <div className="text-slate-600 truncate min-w-0 flex-1" title={r.name}>
+                  <span className="text-slate-400 num mr-1.5">{i + 1}.</span>
+                  <span className="font-medium">{r.name}</span>
+                  <span className="text-slate-400 num"> ({r.qty}건)</span>
+                </div>
+                <span className="num font-semibold text-slate-700 shrink-0">
+                  {fmtKRW(r.loss)}
+                </span>
               </div>
-            </div>
-            <div className="mt-3">{trend}</div>
-          </Fragment>
+            ))}
+          </div>
         )}
       </div>
     </article>
@@ -5425,28 +5458,38 @@ function QualitySettings({ data, onSave }) {
               <button onClick={handleSave} className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-gradient-to-r from-rose-500 to-pink-500 text-white hover:from-rose-600 hover:to-pink-600 shadow shadow-rose-500/20">저장</button>
             </div>
           } />
-        <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {QUALITY_TARGET_DEFS.map((q, i) => {
-            const t = draft[q.key] || DEFAULT_QUALITY_TARGETS[q.key];
-            return (
-              <div key={q.key} className="border border-slate-200 rounded-xl p-5 animate-fade-up overflow-hidden relative"
-                   style={{ animationDelay: `${i*80}ms` }}>
-                <div className="absolute -top-12 -right-12 w-40 h-40 rounded-full blur-2xl opacity-10"
-                     style={{ background: q.color }}></div>
-                <div className="relative">
-                  <div className="font-bold text-slate-800 text-base mb-4">{q.label}</div>
-                  <div className="grid grid-cols-3 gap-2">
-                    <ThreshField label="목표" color="emerald" value={t.target}
-                      onChange={(v)=>update(q.key, 'target', v)} kpi={q} />
-                    <ThreshField label="주의" color="amber"   value={t.warn}
-                      onChange={(v)=>update(q.key, 'warn', v)} kpi={q} />
-                    <ThreshField label="경고" color="rose"    value={t.danger}
-                      onChange={(v)=>update(q.key, 'danger', v)} kpi={q} />
-                  </div>
-                </div>
+        <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {[
+            { title: '부적합 건수', defs: QUALITY_TARGET_DEFS.filter(q => q.unit === '건') },
+            { title: '손실 금액',   defs: QUALITY_TARGET_DEFS.filter(q => q.isKRW) },
+          ].map((group, gi) => (
+            <div key={group.title}>
+              <div className="text-lg font-extrabold text-slate-800 mb-4">{group.title}</div>
+              <div className="grid grid-cols-1 gap-3">
+                {group.defs.map((q, i) => {
+                  const t = draft[q.key] || DEFAULT_QUALITY_TARGETS[q.key];
+                  return (
+                    <div key={q.key} className="border border-slate-200 rounded-xl p-5 animate-fade-up overflow-hidden relative"
+                         style={{ animationDelay: `${(gi*200) + i*80}ms` }}>
+                      <div className="absolute -top-12 -right-12 w-40 h-40 rounded-full blur-2xl opacity-10"
+                           style={{ background: q.color }}></div>
+                      <div className="relative">
+                        <div className="font-bold text-slate-800 text-base mb-4">{q.label}</div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <ThreshField label="목표" color="emerald" value={t.target}
+                            onChange={(v)=>update(q.key, 'target', v)} kpi={q} />
+                          <ThreshField label="주의" color="amber"   value={t.warn}
+                            onChange={(v)=>update(q.key, 'warn', v)} kpi={q} />
+                          <ThreshField label="경고" color="rose"    value={t.danger}
+                            onChange={(v)=>update(q.key, 'danger', v)} kpi={q} />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       </Card>
     </div>
@@ -5456,13 +5499,21 @@ function ThreshField({ label, color, value, onChange, kpi }) {
   const map = { emerald: 'text-emerald-700 bg-emerald-50 border-emerald-200',
                 amber:   'text-amber-700 bg-amber-50 border-amber-200',
                 rose:    'text-rose-700 bg-rose-50 border-rose-200' };
+  // 금액 KPI는 만 원 단위 입력 — 표시값 = value/10000, 저장값 = 입력×10000
+  const isKRW = kpi.isKRW;
+  const displayValue = (isKRW && value !== '' && value !== null && value !== undefined)
+    ? Number(value) / 10000 : value;
+  const handleChange = (raw) => {
+    if (isKRW) onChange(raw === '' ? '' : String(Number(raw) * 10000));
+    else onChange(raw);
+  };
   return (
     <div>
       <div className={`text-[10px] font-semibold mb-1 px-1.5 py-0.5 rounded inline-block ${map[color]}`}>{label}</div>
       <div className="flex items-stretch border border-slate-200 rounded-md overflow-hidden focus-within:ring-2 focus-within:ring-indigo-300">
-        <input type="number" step={kpi.step} value={value ?? ''} onChange={e=>onChange(e.target.value)}
-          className="flex-1 px-2 py-1.5 text-sm num focus:outline-none" />
-        <span className="px-2 grid place-items-center bg-slate-50 text-slate-500 text-[10px] border-l border-slate-200">{kpi.unit}</span>
+        <input type="number" step={isKRW ? 1 : kpi.step} value={displayValue ?? ''} onChange={e=>handleChange(e.target.value)}
+          className="flex-1 min-w-0 px-2 py-1.5 text-sm num focus:outline-none" />
+        <span className="px-2 grid place-items-center bg-slate-50 text-slate-500 text-[10px] border-l border-slate-200 whitespace-nowrap shrink-0">{isKRW ? '만 원' : kpi.unit}</span>
       </div>
     </div>
   );
