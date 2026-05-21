@@ -394,8 +394,8 @@ async function parseErpFile(file) {
     const occurredRaw = r[idx.occurredAt];
     const date = typeof occurredRaw === 'number' ? excelDateToYMD(occurredRaw) : (String(occurredRaw || '').match(/^\d{4}-\d{2}-\d{2}/)?.[0] || '');
     const productName = String(r[idx.product] || '').trim();
-    // 품목명에 '커버' 미포함 행은 제외 (스펀지/조닝폼 등 비커버 자재)
-    if (!productName.includes('커버')) continue;
+    // 품목명에 '커버' 또는 'cover' (대소문자 무관) 미포함 행은 제외 (스펀지/조닝폼 등 비커버 자재)
+    if (!/커버|cover/i.test(productName)) continue;
     records.push({
       no: noNum,
       originProc: String(r[idx.originProc] || '').trim(),
@@ -3746,7 +3746,7 @@ function ErpReportTab({ data, onSaveErp }) {
     setLoading(true);
     try {
       const records = await parseErpFile(file);
-      if (!records.length) { toast('인식된 데이터 행이 없습니다 (품목명에 "커버" 없는 행은 제외됩니다)', 'warn'); return; }
+      if (!records.length) { toast('인식된 데이터 행이 없습니다 (품목명에 "커버"/"Cover" 없는 행은 제외됩니다)', 'warn'); return; }
       const groups = new Map();
       records.forEach(r => {
         const d = r.date || todayYMD();
