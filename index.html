@@ -1425,14 +1425,12 @@ function DashboardPage({ data }) {
                   label="발생 건수"
                   value={erpCurrent.totalQty}
                   prev={erpPrev?.totalQty}
-                  target={qualityTargets.monthlyDefect?.target}
                   unit="건" color="rose" delay={550}
                 />
                 <QualitySummaryCard
                   label="손실 비용"
                   value={erpCurrent.totalLoss}
                   prev={erpPrev?.totalLoss}
-                  target={qualityTargets.monthlyLoss?.target}
                   unit="원" isKRW color="fuchsia" delay={610}
                 />
                 <QualitySummaryCard
@@ -2221,7 +2219,7 @@ function MonthlyProgressCard({ qDef, value, prev, target, monthLabel, days, dela
 /* ============================================================
    17) Quality Summary Cards
    ============================================================ */
-function QualitySummaryCard({ label, value, prev, unit, isKRW, color = 'rose', delay, topReason, target }) {
+function QualitySummaryCard({ label, value, prev, unit, isKRW, color = 'rose', delay, topReason }) {
   const colorMap = {
     rose:    { bg: 'from-rose-500 to-pink-500',     soft: 'bg-rose-50',    text: 'text-rose-700' },
     fuchsia: { bg: 'from-fuchsia-500 to-violet-500', soft: 'bg-fuchsia-50', text: 'text-fuchsia-700' },
@@ -2257,22 +2255,6 @@ function QualitySummaryCard({ label, value, prev, unit, isKRW, color = 'rose', d
     );
   }
 
-  // 목표 대비 달성률 (작을수록 좋음 — 목표/현재)
-  let achNode = null;
-  if (target && target > 0 && value !== undefined && value !== null) {
-    const v = Number(value);
-    const ach = v <= 0 ? 200 : Math.round(Number(target) / v * 100);
-    const achColor = ach >= 100 ? '#10B981' : ach >= 80 ? '#F59E0B' : '#F43F5E';
-    achNode = (
-      <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-        <span className="text-slate-500">
-          월 목표 <span className="text-slate-800 font-bold num">{isKRW ? fmtKRW(target) : `${Number(target).toLocaleString('ko-KR')}${unit || ''}`}</span>
-        </span>
-        <span className="num font-bold" style={{ color: achColor }}>{ach}%</span>
-      </div>
-    );
-  }
-
   return (
     <article className="relative bg-white rounded-2xl border border-slate-200 p-5 shadow-sm overflow-hidden animate-fade-up"
              style={{ animationDelay: `${delay}ms` }}>
@@ -2281,10 +2263,9 @@ function QualitySummaryCard({ label, value, prev, unit, isKRW, color = 'rose', d
         <div className="text-[11px] text-slate-500 mb-1">{label}</div>
         {topReason ? (
           <div>
-            <div className="text-xl font-bold text-slate-900 mt-1 truncate" title={topReason.name}>{topReason.name}</div>
-            <div className="text-xs text-slate-500 num mt-1">
-              {topReason.qty}건 · {fmtKRW(topReason.loss)} 손실
-            </div>
+            <div className="text-3xl font-extrabold text-slate-900 num mt-1">{fmtKRW(topReason.loss)}</div>
+            <div className="text-sm font-semibold text-slate-700 mt-1.5 truncate" title={topReason.name}>{topReason.name}</div>
+            <div className="text-xs text-slate-500 num mt-0.5">{topReason.qty}건</div>
             {topReasonTrend && <div className="mt-3">{topReasonTrend}</div>}
           </div>
         ) : (
@@ -2297,7 +2278,6 @@ function QualitySummaryCard({ label, value, prev, unit, isKRW, color = 'rose', d
               </div>
             </div>
             <div className="mt-3">{trend}</div>
-            {achNode}
           </Fragment>
         )}
       </div>
@@ -3687,10 +3667,19 @@ function ErpReportTab({ data, onSaveErp }) {
         </div>
       </Card>
 
-      {/* 양식 (보기 전용) */}
+      {/* 양식 — 단일 일자 보기일 때 인라인 편집, 합산(여러 일자)이면 보기 전용 */}
       {!report
         ? <EmptyHint iconName="upload" msg={`${periodMetaLabel}에 해당하는 리포트가 없습니다.`} />
-        : <ErpReportView report={report} meta={{ reportDate: periodMetaLabel }} draft={aggregated} onUpdateField={null} />}
+        : <ErpReportView report={report} meta={{ reportDate: periodMetaLabel }} draft={aggregated}
+            onUpdateField={filtered.length === 1 ? (field, key, val) => {
+              const entry = filtered[0];
+              const next = {
+                ...entry,
+                [field]: { ...(entry[field] || {}), [key]: val },
+                updatedAt: new Date().toISOString(),
+              };
+              onSaveErp(reports.map(r => r.id === entry.id ? next : r));
+            } : null} />}
     </Fragment>
   );
 }
