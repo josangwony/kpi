@@ -578,7 +578,7 @@ function getAchievement(kpiKey, value, targets) {
 /* ============================================================
    3) 저장소 — localStorage 캐시 + Firebase 동기화
    ============================================================ */
-const STORE_KEYS = ['production', 'quality', 'targets', 'qualityTargets', 'erpReports', 'priceMaster', 'erpTrash', 'productionTrash', 'weeklyJournal', 'productCatalog', 'bunghalLog', 'bunghalCorrections'];
+const STORE_KEYS = ['production', 'quality', 'targets', 'qualityTargets', 'erpReports', 'priceMaster', 'erpTrash', 'productionTrash', 'weeklyJournal', 'productCatalog', 'bunghalLog', 'bunghalCorrections', 'geminiApiKey', 'geminiPassHash'];
 
 // 봉탈 분석용 품목 사전 — 사용자가 수정 가능
 const DEFAULT_PRODUCT_CATALOG = {
@@ -723,6 +723,8 @@ function App() {
     productCatalog:  LS.get('productCatalog', DEFAULT_PRODUCT_CATALOG),
     bunghalLog:      LS.get('bunghalLog', []),
     bunghalCorrections: LS.get('bunghalCorrections', []),
+    geminiApiKey:    LS.get('geminiApiKey', '') || localStorage.getItem('kpi_gemini_key') || '',
+    geminiPassHash:  LS.get('geminiPassHash', '') || localStorage.getItem('kpi_gemini_pass_hash') || '',
   });
   const [lastSync, setLastSync] = useState(null);
 
@@ -744,6 +746,8 @@ function App() {
         productCatalog:  fb.productCatalog  ?? prev.productCatalog,
         bunghalLog:      fb.bunghalLog      ?? prev.bunghalLog,
         bunghalCorrections: fb.bunghalCorrections ?? prev.bunghalCorrections,
+        geminiApiKey:    fb.geminiApiKey    ?? prev.geminiApiKey,
+        geminiPassHash:  fb.geminiPassHash  ?? prev.geminiPassHash,
       }));
       setLastSync(new Date());
       if (window.__fb && window.__fb.listen) {
@@ -780,6 +784,8 @@ function App() {
   const saveProductCatalog  = (c)       => { setData(prev => ({...prev, productCatalog:  c})); LS.set('productCatalog',  c); };
   const saveBunghalLog      = (l)       => { setData(prev => ({...prev, bunghalLog:      l})); LS.set('bunghalLog',      l); };
   const saveBunghalCorrections = (c)    => { setData(prev => ({...prev, bunghalCorrections: c})); LS.set('bunghalCorrections', c); };
+  const saveGeminiApiKey       = (k)    => { setData(prev => ({...prev, geminiApiKey:    k})); LS.set('geminiApiKey',    k || ''); };
+  const saveGeminiPassHash     = (h)    => { setData(prev => ({...prev, geminiPassHash:  h})); LS.set('geminiPassHash',  h || ''); };
 
   // 휴지통 7일 자동 청소 (erpTrash + productionTrash)
   useEffect(() => {
@@ -816,7 +822,7 @@ function App() {
           <TopBar route={route} navigate={navigate} lastSync={lastSync} />
           <main className="flex-1 px-6 lg:px-10 py-6 max-w-[1600px] w-full mx-auto">
             {route === '/dashboard'           && <DashboardPage     data={data} />}
-            {route === '/production'          && <ProductionPage    data={data} onSave={saveProduction} onSaveTrash={saveProductionTrash} onSaveJournal={saveWeeklyJournal} onSaveCatalog={saveProductCatalog} onSaveBunghalLog={saveBunghalLog} onSaveBunghalCorrections={saveBunghalCorrections} />}
+            {route === '/production'          && <ProductionPage    data={data} onSave={saveProduction} onSaveTrash={saveProductionTrash} onSaveJournal={saveWeeklyJournal} onSaveCatalog={saveProductCatalog} onSaveBunghalLog={saveBunghalLog} onSaveBunghalCorrections={saveBunghalCorrections} onSaveGeminiKey={saveGeminiApiKey} onSaveGeminiPassHash={saveGeminiPassHash} />}
             {route === '/quality'             && <QualityPage       data={data}
                                                                     onSave={saveQuality}
                                                                     onSaveErp={saveErpReports}
@@ -2812,7 +2818,7 @@ function RecentQualityTable({ entries }) {
 /* ============================================================
    22) PRODUCTION PAGE — 일별 입력
    ============================================================ */
-function ProductionPage({ data, onSave, onSaveTrash, onSaveJournal, onSaveCatalog, onSaveBunghalLog, onSaveBunghalCorrections }) {
+function ProductionPage({ data, onSave, onSaveTrash, onSaveJournal, onSaveCatalog, onSaveBunghalLog, onSaveBunghalCorrections, onSaveGeminiKey, onSaveGeminiPassHash }) {
   const toast = useToast();
   const [tab, setTab] = useState('input');
   const today = todayYMD();
@@ -2945,8 +2951,8 @@ function ProductionPage({ data, onSave, onSaveTrash, onSaveJournal, onSaveCatalo
       {tab === 'input'   && <ProductionInputTab   tasks={tasks} updateTask={updateTask} />}
       {tab === 'journal' && <WeeklyJournalTab     data={data} onSaveJournal={onSaveJournal} />}
       {tab === 'summary' && <ProductionSummaryTab data={data} />}
-      {tab === 'bunghalRecord' && <BunghalAnalysisTab mode="record"   data={data} onSave={onSave} onSaveLog={onSaveBunghalLog} onSaveCatalog={onSaveCatalog} onSaveCorrections={onSaveBunghalCorrections} />}
-      {tab === 'bunghal'       && <BunghalAnalysisTab mode="analysis" data={data} onSave={onSave} onSaveLog={onSaveBunghalLog} onSaveCatalog={onSaveCatalog} onSaveCorrections={onSaveBunghalCorrections} />}
+      {tab === 'bunghalRecord' && <BunghalAnalysisTab mode="record"   data={data} onSave={onSave} onSaveLog={onSaveBunghalLog} onSaveCatalog={onSaveCatalog} onSaveCorrections={onSaveBunghalCorrections} onSaveGeminiKey={onSaveGeminiKey} onSaveGeminiPassHash={onSaveGeminiPassHash} />}
+      {tab === 'bunghal'       && <BunghalAnalysisTab mode="analysis" data={data} onSave={onSave} onSaveLog={onSaveBunghalLog} onSaveCatalog={onSaveCatalog} onSaveCorrections={onSaveBunghalCorrections} onSaveGeminiKey={onSaveGeminiKey} onSaveGeminiPassHash={onSaveGeminiPassHash} />}
       {tab === 'history' && <ProductionHistoryTab data={data} onSave={onSave} onSaveTrash={onSaveTrash} />}
     </div>
   );
@@ -3675,7 +3681,7 @@ function BunghalDonutChart({ items, palette }) {
   return <div className="h-56"><canvas ref={ref}></canvas></div>;
 }
 
-function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorrections, mode = 'analysis' }) {
+function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorrections, onSaveGeminiKey, onSaveGeminiPassHash, mode = 'analysis' }) {
   const isRecord = mode === 'record';
   const isAnalysis = mode === 'analysis';
   const toast = useToast();
@@ -3705,7 +3711,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
   const [photoDataUrl, setPhotoDataUrl] = useState(null);
   const [photoZoomOpen, setPhotoZoomOpen] = useState(false);
   const [recognizing, setRecognizing] = useState(false);
-  const [apiKey, setApiKeyState] = useState(() => localStorage.getItem('kpi_gemini_key') || '');
+  const apiKey = data.geminiApiKey || '';
   // 비밀번호 잠금
   const [keyUnlocked, setKeyUnlocked] = useState(false);
   const [keyPassMode, setKeyPassMode] = useState(null); // null | 'set' | 'verify'
@@ -3716,12 +3722,12 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
   const fileRef  = useRef(null);
   const skipReloadRef = useRef(false);  // 인식 후 헤더 자동 갱신 시 useEffect의 reset 건너뛰기
 
-  const hasPassword = !!localStorage.getItem('kpi_gemini_pass_hash');
+  const hasPassword = !!data.geminiPassHash;
 
   const setApiKey = (k) => {
-    setApiKeyState(k);
-    if (k) localStorage.setItem('kpi_gemini_key', k);
-    else   localStorage.removeItem('kpi_gemini_key');
+    onSaveGeminiKey && onSaveGeminiKey(k || '');
+    // 구버전 호환 — localStorage의 옛 키 정리
+    if (!k) localStorage.removeItem('kpi_gemini_key');
   };
 
   // 사진 확대 모달 ESC 닫기
@@ -3750,7 +3756,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
     if (passInput.length < 4) { setPassError('비밀번호는 최소 4자 이상'); return; }
     if (passInput !== passInput2) { setPassError('비밀번호가 일치하지 않습니다'); return; }
     const hash = await sha256Hex(passInput);
-    localStorage.setItem('kpi_gemini_pass_hash', hash);
+    onSaveGeminiPassHash && onSaveGeminiPassHash(hash);
     setKeyUnlocked(true);
     setKeyPassMode(null);
     setPassInput(''); setPassInput2(''); setPassError('');
@@ -3759,8 +3765,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
 
   const handleVerifyPassword = async () => {
     const hash = await sha256Hex(passInput);
-    const stored = localStorage.getItem('kpi_gemini_pass_hash');
-    if (hash === stored) {
+    if (hash === (data.geminiPassHash || '')) {
       setKeyUnlocked(true);
       setKeyPassMode(null);
       setPassInput(''); setPassError('');
@@ -3770,10 +3775,11 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
   };
 
   const handleResetPassword = () => {
-    if (!confirm('비밀번호와 API 키를 모두 초기화할까요?')) return;
+    if (!confirm('비밀번호와 API 키를 모두 초기화할까요? (Firestore의 공유 비밀번호·키도 삭제되어 모든 PC에 적용됩니다)')) return;
     localStorage.removeItem('kpi_gemini_pass_hash');
     localStorage.removeItem('kpi_gemini_key');
-    setApiKeyState('');
+    onSaveGeminiPassHash && onSaveGeminiPassHash('');
+    onSaveGeminiKey && onSaveGeminiKey('');
     setKeyUnlocked(false);
     setKeyPassMode(null);
     setPassInput(''); setPassInput2(''); setPassError('');
