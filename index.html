@@ -59,6 +59,7 @@ tailwind.config = {
         'pop':       'pop .35s cubic-bezier(.16,.84,.44,1) both',
         'slide-down':'slideDown .35s ease-out both',
         'pulse-ring':'pulseRing 1.8s ease-out infinite',
+        'scan-line': 'scanLine 1.6s ease-in-out infinite',
       },
       keyframes: {
         fadeUp:    { from: { opacity: 0, transform: 'translateY(12px)' }, to: { opacity: 1, transform: 'translateY(0)' } },
@@ -66,6 +67,7 @@ tailwind.config = {
         pop:       { '0%': { transform: 'scale(.92)', opacity: 0 }, '100%': { transform: 'scale(1)', opacity: 1 } },
         slideDown: { from: { opacity: 0, transform: 'translateY(-8px)' }, to: { opacity: 1, transform: 'translateY(0)' } },
         pulseRing: { '0%': { transform: 'scale(1)', opacity: .8 }, '100%': { transform: 'scale(2.4)', opacity: 0 } },
+        scanLine:  { '0%': { top: '0%' }, '50%': { top: 'calc(100% - 3px)' }, '100%': { top: '0%' } },
       },
     }
   }
@@ -576,7 +578,19 @@ function getAchievement(kpiKey, value, targets) {
 /* ============================================================
    3) 저장소 — localStorage 캐시 + Firebase 동기화
    ============================================================ */
-const STORE_KEYS = ['production', 'quality', 'targets', 'qualityTargets', 'erpReports', 'priceMaster', 'erpTrash', 'productionTrash', 'weeklyJournal'];
+const STORE_KEYS = ['production', 'quality', 'targets', 'qualityTargets', 'erpReports', 'priceMaster', 'erpTrash', 'productionTrash', 'weeklyJournal', 'productCatalog', 'bunghalLog', 'bunghalCorrections'];
+
+// 봉탈 분석용 품목 사전 — 사용자가 수정 가능
+const DEFAULT_PRODUCT_CATALOG = {
+  products:  ['이브닝', '쿠시노', '데일리', '데일리라이트', '뉴문', '하프문', '풀문', '문레이', '선셋', '선라이즈', '시그니처', '키즈'],
+  sizes:     ['S', 'SS', 'D', 'Q', 'K', 'KK'],
+  positions: ['최상단', '상', '하'],
+  aliases:   { '라이트': '데일리라이트' },
+  causes:    ['봉탈', '재작업 부족', '스펀지 접힘', '원단 부족(수선)', '오염', '이물', '기타'],
+  origins:   ['퀼팅', '인터', '업체', '수선'],
+  actions:   ['수선', '폐기'],
+  owners:    ['진아라', '옥사나'],
+};
 const LS = {
   get: (k, fallback) => {
     try { const v = localStorage.getItem('kpi_' + k); return v ? JSON.parse(v) : fallback; }
@@ -706,6 +720,9 @@ function App() {
     erpTrash:        LS.get('erpTrash', []),
     productionTrash: LS.get('productionTrash', []),
     weeklyJournal:   LS.get('weeklyJournal', {}),
+    productCatalog:  LS.get('productCatalog', DEFAULT_PRODUCT_CATALOG),
+    bunghalLog:      LS.get('bunghalLog', []),
+    bunghalCorrections: LS.get('bunghalCorrections', []),
   });
   const [lastSync, setLastSync] = useState(null);
 
@@ -724,6 +741,9 @@ function App() {
         erpTrash:        fb.erpTrash        ?? prev.erpTrash,
         productionTrash: fb.productionTrash ?? prev.productionTrash,
         weeklyJournal:   fb.weeklyJournal   ?? prev.weeklyJournal,
+        productCatalog:  fb.productCatalog  ?? prev.productCatalog,
+        bunghalLog:      fb.bunghalLog      ?? prev.bunghalLog,
+        bunghalCorrections: fb.bunghalCorrections ?? prev.bunghalCorrections,
       }));
       setLastSync(new Date());
       if (window.__fb && window.__fb.listen) {
@@ -757,6 +777,9 @@ function App() {
   const saveErpTrash        = (t)       => { setData(prev => ({...prev, erpTrash:        t})); LS.set('erpTrash',        t); };
   const saveProductionTrash = (t)       => { setData(prev => ({...prev, productionTrash: t})); LS.set('productionTrash', t); };
   const saveWeeklyJournal   = (j)       => { setData(prev => ({...prev, weeklyJournal:   j})); LS.set('weeklyJournal',   j); };
+  const saveProductCatalog  = (c)       => { setData(prev => ({...prev, productCatalog:  c})); LS.set('productCatalog',  c); };
+  const saveBunghalLog      = (l)       => { setData(prev => ({...prev, bunghalLog:      l})); LS.set('bunghalLog',      l); };
+  const saveBunghalCorrections = (c)    => { setData(prev => ({...prev, bunghalCorrections: c})); LS.set('bunghalCorrections', c); };
 
   // 휴지통 7일 자동 청소 (erpTrash + productionTrash)
   useEffect(() => {
@@ -793,7 +816,7 @@ function App() {
           <TopBar route={route} navigate={navigate} lastSync={lastSync} />
           <main className="flex-1 px-6 lg:px-10 py-6 max-w-[1600px] w-full mx-auto">
             {route === '/dashboard'           && <DashboardPage     data={data} />}
-            {route === '/production'          && <ProductionPage    data={data} onSave={saveProduction} onSaveTrash={saveProductionTrash} onSaveJournal={saveWeeklyJournal} />}
+            {route === '/production'          && <ProductionPage    data={data} onSave={saveProduction} onSaveTrash={saveProductionTrash} onSaveJournal={saveWeeklyJournal} onSaveCatalog={saveProductCatalog} onSaveBunghalLog={saveBunghalLog} onSaveBunghalCorrections={saveBunghalCorrections} />}
             {route === '/quality'             && <QualityPage       data={data}
                                                                     onSave={saveQuality}
                                                                     onSaveErp={saveErpReports}
@@ -2789,7 +2812,7 @@ function RecentQualityTable({ entries }) {
 /* ============================================================
    22) PRODUCTION PAGE — 일별 입력
    ============================================================ */
-function ProductionPage({ data, onSave, onSaveTrash, onSaveJournal }) {
+function ProductionPage({ data, onSave, onSaveTrash, onSaveJournal, onSaveCatalog, onSaveBunghalLog, onSaveBunghalCorrections }) {
   const toast = useToast();
   const [tab, setTab] = useState('input');
   const today = todayYMD();
@@ -2897,6 +2920,8 @@ function ProductionPage({ data, onSave, onSaveTrash, onSaveJournal }) {
           <ProductionTabBtn active={tab==='input'}   onClick={() => setTab('input')}   icon="pencil"    label="일간 입력" />
           <ProductionTabBtn active={tab==='journal'} onClick={() => setTab('journal')} icon="notebook"  label="주간 기록" />
           <ProductionTabBtn active={tab==='summary'} onClick={() => setTab('summary')} icon="dashboard" label="종합 지표" />
+          <ProductionTabBtn active={tab==='bunghalRecord'} onClick={() => setTab('bunghalRecord')} icon="pencil" label="봉탈 기록" />
+          <ProductionTabBtn active={tab==='bunghal'} onClick={() => setTab('bunghal')} icon="shield"    label="봉탈 분석" />
           <ProductionTabBtn active={tab==='history'} onClick={() => setTab('history')} icon="upload"    label="작성 이력" />
         </div>
         {tab === 'input' && (
@@ -2920,6 +2945,8 @@ function ProductionPage({ data, onSave, onSaveTrash, onSaveJournal }) {
       {tab === 'input'   && <ProductionInputTab   tasks={tasks} updateTask={updateTask} />}
       {tab === 'journal' && <WeeklyJournalTab     data={data} onSaveJournal={onSaveJournal} />}
       {tab === 'summary' && <ProductionSummaryTab data={data} />}
+      {tab === 'bunghalRecord' && <BunghalAnalysisTab mode="record"   data={data} onSave={onSave} onSaveLog={onSaveBunghalLog} onSaveCatalog={onSaveCatalog} onSaveCorrections={onSaveBunghalCorrections} />}
+      {tab === 'bunghal'       && <BunghalAnalysisTab mode="analysis" data={data} onSave={onSave} onSaveLog={onSaveBunghalLog} onSaveCatalog={onSaveCatalog} onSaveCorrections={onSaveBunghalCorrections} />}
       {tab === 'history' && <ProductionHistoryTab data={data} onSave={onSave} onSaveTrash={onSaveTrash} />}
     </div>
   );
@@ -3422,6 +3449,1543 @@ function ProductionSummaryTab({ data }) {
           </div>
         </Fragment>
       )}
+    </Fragment>
+  );
+}
+
+/* ============================================================
+   22-B2) BUNGHAL ANALYSIS TAB — 봉탈 집중 분석 (퀼팅·인터)
+   ============================================================ */
+function makeEmptyBunghalRecord() {
+  return { _id: crypto.randomUUID(), product: '', size: '', position: '', qty: '', cause: '', originProc: '', action: '' };
+}
+
+function makeEmptyProductionRecord() {
+  return { _id: crypto.randomUUID(), product: '', size: '', position: '', qty: '', time: '' };
+}
+
+// 비밀번호 해시 (Web Crypto API의 SHA-256)
+async function sha256Hex(text) {
+  const buf = new TextEncoder().encode(text);
+  const h = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// 품목 표기 정규화 — "데일리SS상" 같은 자유 입력을 catalog에 fuzzy match
+function normalizeProductName(raw, catalog) {
+  const s = String(raw || '').trim();
+  if (!s) return s;
+  // alias 직접 치환
+  let out = s;
+  Object.entries(catalog.aliases || {}).forEach(([from, to]) => {
+    out = out.replace(new RegExp(from, 'g'), to);
+  });
+  return out;
+}
+
+// Gemini Vision에 보낼 프롬프트 (사전 + 규칙 + 자가학습 컨텍스트)
+function buildBunghalPrompt(catalog, corrections) {
+  const aliasStr = Object.entries(catalog.aliases || {})
+    .map(([k, v]) => `  - "${k}" → "${v}"`).join('\n') || '  (없음)';
+  const corrStr = (corrections || []).length
+    ? corrections.map(c => `  - "${c.wrong}" → "${c.correct}"`).join('\n')
+    : '  (없음)';
+  return `당신은 매트리스 공장의 손글씨 작업일지를 읽어서 *두 개의 표*를 JSON 객체로 변환합니다.
+
+[표 구조 — 작업일지에는 표가 두 개 있습니다]
+
+**(1) 상단 표 — "생산량" (품목별 작업 내역)**
+컬럼: 번호 | 품목 | 수량 | 작업시간 | 특이사항
+각 행을 다음 필드로 추출 → "production" 배열:
+  - product (품목명, 한글)
+  - size (사이즈, 알파벳)
+  - position (위치: "상" 또는 "하", 없으면 빈 문자열)
+  - qty (생산 수량, 숫자)
+  - time (작업시간 텍스트 그대로, 예 "8:40-10:25")
+
+**(2) 하단 표 — "부적합 유형"**
+컬럼: 품목 | 수량 | 원인 | 원인공정 | 처리내역
+각 행을 다음 필드로 추출 → "defects" 배열:
+  - product (품목명, 한글)
+  - size (사이즈, 알파벳)
+  - position (위치, 위와 동일 규칙)
+  - qty (부적합 수량, 숫자)
+  - cause (원인, 한글 텍스트)
+  - originProc (원인공정: "퀼팅" / "인터" / "업체")
+  - action (처리내역: "수선" / "폐기")
+
+[품목 사전 — 이 목록에 가장 가까운 것으로 자동 교정]
+품목명: ${catalog.products.join(', ')}
+사이즈: ${catalog.sizes.join(', ')}
+위치: ${catalog.positions.join(', ')}
+원인공정: ${(catalog.origins || []).join(', ')}
+처리내역: ${(catalog.actions || []).join(', ')}
+
+[Alias — 다음 표기는 자동 치환]
+${aliasStr}
+
+[축약 규칙 — 매우 중요 · 두 표 모두 적용]
+- 셀이 "(따옴표) 또는 〃 또는 빈칸 = 위 행의 *전체 값* 그대로 복사
+- "S, "SS, "K처럼 따옴표 뒤 알파벳 = 위 행의 *품목명* 유지 + 새 사이즈
+- 따옴표 뒤 한글(상/하) = 위 행의 *품목명·사이즈* 유지 + 새 위치
+
+[위치 기본값 규칙]
+- "최상단", "상", "하" 중 하나가 *명확히 적혀있지 않으면* position을 "상"으로 채움
+
+[원인공정 규칙 — 수선건 자동 분류 (하단 표만)]
+- 원인 텍스트에 "수선" 또는 "수선건" 표현이 *포함*되어 있으면 originProc = "수선"
+- 예: "원단구멍 (수선건)" → cause: "원단구멍", originProc: "수선"
+- cause 필드에서는 괄호 부분·"수선"/"수선건" 표현을 제거하여 *순수 원인*만 남김
+
+[이전 오인식 — 같은 오류 반복 금지]
+${corrStr}
+
+[작업일지 메타정보]
+사진 상단에 "작업일자"와 "작업자"가 적혀있습니다.
+- date: YYYY-MM-DD 형식으로 정규화 (예: "2026.5.21" → "2026-05-21")
+- owner: 작업자 이름 (한글)
+- 알 수 없으면 빈 문자열
+
+[출력 형식 — 매우 중요]
+- 순수 JSON 객체만 출력 (앞뒤 설명·코드블록 금지)
+- 구조: { "meta": { "date": "...", "owner": "..." }, "production": [...], "defects": [...] }
+- 예시:
+{
+  "meta": { "date": "2026-05-21", "owner": "진아라" },
+  "production": [
+    {"product":"쿠시노","size":"SS","position":"상","qty":32,"time":"8:40-10:25"},
+    {"product":"하프문","size":"Q","position":"상","qty":2,"time":""}
+  ],
+  "defects": [
+    {"product":"쿠시노","size":"SS","position":"상","qty":9,"cause":"봉탈","originProc":"퀼팅","action":"수선"}
+  ]
+}
+- 표가 없으면 해당 배열은 []`;
+}
+function BunghalKpiCard({ label, value, suffix = '', sub, icon, color = 'violet', delay = 0 }) {
+  const palette = {
+    violet:  { bg: 'from-violet-500 to-indigo-500',  text: 'text-violet-700',  soft: 'bg-violet-50',  bar: 'from-violet-400 to-indigo-500' },
+    rose:    { bg: 'from-rose-500 to-pink-500',      text: 'text-rose-700',    soft: 'bg-rose-50',    bar: 'from-rose-400 to-pink-500' },
+    amber:   { bg: 'from-amber-500 to-orange-500',   text: 'text-amber-700',   soft: 'bg-amber-50',   bar: 'from-amber-400 to-orange-500' },
+    emerald: { bg: 'from-emerald-500 to-teal-500',   text: 'text-emerald-700', soft: 'bg-emerald-50', bar: 'from-emerald-400 to-teal-500' },
+    fuchsia: { bg: 'from-fuchsia-500 to-purple-500', text: 'text-fuchsia-700', soft: 'bg-fuchsia-50', bar: 'from-fuchsia-400 to-purple-500' },
+  }[color] || { bg: 'from-violet-500 to-indigo-500', text: 'text-violet-700', soft: 'bg-violet-50', bar: 'from-violet-400 to-indigo-500' };
+  return (
+    <article className="relative bg-white rounded-2xl border border-slate-200 p-5 shadow-sm overflow-hidden animate-fade-up group hover:shadow-lg transition-shadow"
+             style={{ animationDelay: `${delay}ms` }}>
+      <div className={`absolute -top-10 -right-10 w-32 h-32 rounded-full bg-gradient-to-br ${palette.bg} opacity-10 blur-2xl group-hover:opacity-20 transition-opacity`}></div>
+      <div className="relative">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[11px] text-slate-500 font-medium">{label}</span>
+          {icon && <div className={`w-7 h-7 rounded-lg ${palette.soft} ${palette.text} grid place-items-center`}>{icon}</div>}
+        </div>
+        <div className="flex items-baseline gap-1 mt-1">
+          <span className={`text-3xl font-extrabold tracking-tight num ${typeof value === 'number' ? 'text-slate-900' : palette.text}`}>{value ?? '—'}</span>
+          {suffix && <span className="text-sm text-slate-500 font-medium">{suffix}</span>}
+        </div>
+        {sub && <div className="text-[11px] text-slate-400 num mt-1.5">{sub}</div>}
+      </div>
+    </article>
+  );
+}
+
+function BunghalTrendChart({ trend }) {
+  const ref = useRef(null);
+  const chartRef = useRef(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    if (chartRef.current) chartRef.current.destroy();
+    if (!trend.length) return;
+    const ctx = ref.current.getContext('2d');
+    const grad = ctx.createLinearGradient(0, 0, 0, 200);
+    grad.addColorStop(0, 'rgba(139, 92, 246, 0.35)');
+    grad.addColorStop(1, 'rgba(139, 92, 246, 0)');
+    chartRef.current = new Chart(ref.current, {
+      type: 'line',
+      data: {
+        labels: trend.map(t => `${Number(t.date.slice(5,7))}/${Number(t.date.slice(8,10))}`),
+        datasets: [{
+          label: '봉탈 건수',
+          data: trend.map(t => t.qty),
+          borderColor: '#8B5CF6',
+          backgroundColor: grad,
+          borderWidth: 2.5,
+          tension: 0.35,
+          fill: true,
+          pointBackgroundColor: '#8B5CF6',
+          pointBorderColor: '#fff',
+          pointBorderWidth: 2,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        animation: { duration: 800, easing: 'easeOutQuart' },
+        plugins: {
+          legend: { display: false },
+          tooltip: { backgroundColor: '#0F172A', padding: 10, displayColors: false,
+            callbacks: { title: (items) => trend[items[0].dataIndex]?.date, label: (c) => `${c.parsed.y}건` } },
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: '#64748B', font: { size: 10 } } },
+          y: { beginAtZero: true, grid: { color: '#F1F5F9' }, ticks: { color: '#64748B', font: { size: 10 }, precision: 0 } },
+        },
+      },
+    });
+    return () => { if (chartRef.current) chartRef.current.destroy(); };
+  }, [trend]);
+  return <div className="h-56"><canvas ref={ref}></canvas></div>;
+}
+
+function BunghalDonutChart({ items, palette }) {
+  const ref = useRef(null);
+  const chartRef = useRef(null);
+  const colors = palette || ['#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#3B82F6', '#F43F5E', '#A855F7', '#06B6D4'];
+  useEffect(() => {
+    if (!ref.current) return;
+    if (chartRef.current) chartRef.current.destroy();
+    if (!items.length) return;
+    chartRef.current = new Chart(ref.current, {
+      type: 'doughnut',
+      data: {
+        labels: items.map(i => i.name),
+        datasets: [{
+          data: items.map(i => i.qty),
+          backgroundColor: items.map((_, i) => colors[i % colors.length]),
+          borderWidth: 0,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '60%',
+        animation: { animateRotate: true, duration: 800 },
+        plugins: {
+          legend: { position: 'bottom', labels: { color: '#475569', font: { size: 11 }, boxWidth: 12, padding: 10 } },
+          tooltip: { backgroundColor: '#0F172A', padding: 10,
+            callbacks: { label: (c) => {
+              const total = items.reduce((s, i) => s + i.qty, 0);
+              const pct = total ? Math.round(c.parsed / total * 100) : 0;
+              return ` ${c.label}: ${c.parsed}건 (${pct}%)`;
+            } } },
+        },
+      },
+    });
+    return () => { if (chartRef.current) chartRef.current.destroy(); };
+  }, [items, palette]);
+  return <div className="h-56"><canvas ref={ref}></canvas></div>;
+}
+
+function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorrections, mode = 'analysis' }) {
+  const isRecord = mode === 'record';
+  const isAnalysis = mode === 'analysis';
+  const toast = useToast();
+  const erpReports = data.erpReports || [];
+  const bunghalLog = data.bunghalLog || [];
+  const catalog    = data.productCatalog || DEFAULT_PRODUCT_CATALOG;
+  const today = todayYMD();
+  const yesterday = ymdShift(today, -1);
+
+  const [period, setPeriod] = useState('week');
+  const [selectedDay, setSelectedDay] = useState(yesterday);
+  const [selectedWeek, setSelectedWeek] = useState('');
+  const [selectedMonth, setSelectedMonth] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [typeFilter, setTypeFilter] = useState('both'); // 'quilting' | 'inter' | 'both'
+
+  // 작업일지 입력 영역 상태
+  const [inputOpen, setInputOpen] = useState(true);
+  const [ownerEditOpen, setOwnerEditOpen] = useState(false);
+  const [ownerEditText, setOwnerEditText] = useState('');
+  const [inputDate, setInputDate] = useState(yesterday);
+  const [inputOwner, setInputOwner] = useState(() => localStorage.getItem('kpi_owner_bunghal') || '');
+  const [inputRecords, setInputRecords] = useState([]);
+  const [productionRecords, setProductionRecords] = useState([]);  // 생산량 (상단 표)
+  const [originalRecords, setOriginalRecords] = useState([]); // 인식 직후 원본 (수정 비교용)
+  const [photoDataUrl, setPhotoDataUrl] = useState(null);
+  const [photoZoomOpen, setPhotoZoomOpen] = useState(false);
+  const [recognizing, setRecognizing] = useState(false);
+  const [apiKey, setApiKeyState] = useState(() => localStorage.getItem('kpi_gemini_key') || '');
+  // 비밀번호 잠금
+  const [keyUnlocked, setKeyUnlocked] = useState(false);
+  const [keyPassMode, setKeyPassMode] = useState(null); // null | 'set' | 'verify'
+  const [passInput, setPassInput] = useState('');
+  const [passInput2, setPassInput2] = useState('');
+  const [passError, setPassError] = useState('');
+  const pasteRef = useRef(null);
+  const fileRef  = useRef(null);
+  const skipReloadRef = useRef(false);  // 인식 후 헤더 자동 갱신 시 useEffect의 reset 건너뛰기
+
+  const hasPassword = !!localStorage.getItem('kpi_gemini_pass_hash');
+
+  const setApiKey = (k) => {
+    setApiKeyState(k);
+    if (k) localStorage.setItem('kpi_gemini_key', k);
+    else   localStorage.removeItem('kpi_gemini_key');
+  };
+
+  // 사진 확대 모달 ESC 닫기
+  useEffect(() => {
+    if (!photoZoomOpen) return;
+    const h = (e) => { if (e.key === 'Escape') setPhotoZoomOpen(false); };
+    document.addEventListener('keydown', h);
+    return () => document.removeEventListener('keydown', h);
+  }, [photoZoomOpen]);
+
+  // 키 영역 열기 — 비밀번호 미설정 시 'set', 잠겨있으면 'verify'
+  const openKeyEditor = () => {
+    setPassInput(''); setPassInput2(''); setPassError('');
+    if (!hasPassword) setKeyPassMode('set');
+    else if (!keyUnlocked) setKeyPassMode('verify');
+    else setKeyPassMode(null); // 이미 열려있음
+  };
+
+  const closeKeyEditor = () => {
+    setKeyPassMode(null);
+    setKeyUnlocked(false); // 닫으면 자동 잠금
+    setPassInput(''); setPassInput2(''); setPassError('');
+  };
+
+  const handleSetPassword = async () => {
+    if (passInput.length < 4) { setPassError('비밀번호는 최소 4자 이상'); return; }
+    if (passInput !== passInput2) { setPassError('비밀번호가 일치하지 않습니다'); return; }
+    const hash = await sha256Hex(passInput);
+    localStorage.setItem('kpi_gemini_pass_hash', hash);
+    setKeyUnlocked(true);
+    setKeyPassMode(null);
+    setPassInput(''); setPassInput2(''); setPassError('');
+    toast('비밀번호 설정 완료', 'success');
+  };
+
+  const handleVerifyPassword = async () => {
+    const hash = await sha256Hex(passInput);
+    const stored = localStorage.getItem('kpi_gemini_pass_hash');
+    if (hash === stored) {
+      setKeyUnlocked(true);
+      setKeyPassMode(null);
+      setPassInput(''); setPassError('');
+    } else {
+      setPassError('비밀번호가 일치하지 않습니다');
+    }
+  };
+
+  const handleResetPassword = () => {
+    if (!confirm('비밀번호와 API 키를 모두 초기화할까요?')) return;
+    localStorage.removeItem('kpi_gemini_pass_hash');
+    localStorage.removeItem('kpi_gemini_key');
+    setApiKeyState('');
+    setKeyUnlocked(false);
+    setKeyPassMode(null);
+    setPassInput(''); setPassInput2(''); setPassError('');
+    toast('비밀번호·API 키 초기화 완료', 'info');
+  };
+
+  // 사진 붙여넣기 — paste 이벤트 → base64
+  const onPasteImage = (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const it of items) {
+      if (it.type && it.type.startsWith('image/')) {
+        const blob = it.getAsFile();
+        const reader = new FileReader();
+        reader.onload = ev => setPhotoDataUrl(ev.target.result);
+        reader.readAsDataURL(blob);
+        e.preventDefault();
+        return;
+      }
+    }
+  };
+  const onPickFile = (file) => {
+    if (!file || !file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = ev => setPhotoDataUrl(ev.target.result);
+    reader.readAsDataURL(file);
+  };
+
+  // Gemini Vision 호출 — 작업일지 사진 → JSON record 배열
+  const runRecognition = async () => {
+    if (!photoDataUrl) { toast('먼저 사진을 붙여넣거나 선택해주세요', 'warn'); return; }
+    if (!apiKey) { setShowKeyEditor(true); toast('Gemini API 키를 먼저 등록해주세요', 'warn'); return; }
+    setRecognizing(true);
+    try {
+      const base64 = photoDataUrl.split(',')[1];
+      const mimeType = photoDataUrl.match(/^data:(.+);base64/)?.[1] || 'image/png';
+      const corrections = (data.bunghalCorrections || []).slice(-30); // 최근 30개만
+      const prompt = buildBunghalPrompt(catalog, corrections);
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${encodeURIComponent(apiKey)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: prompt },
+              { inline_data: { mime_type: mimeType, data: base64 } },
+            ],
+          }],
+          generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
+        }),
+      });
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Gemini API ${res.status}: ${errText.slice(0, 200)}`);
+      }
+      const json = await res.json();
+      const text = json.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      let parsed;
+      try { parsed = JSON.parse(text); }
+      catch (e) { throw new Error('Gemini 응답 JSON 파싱 실패: ' + text.slice(0, 200)); }
+      // 호환: 구버전 응답(배열만)도 지원
+      const defectsArr = Array.isArray(parsed) ? parsed : (parsed.defects || []);
+      const prodArr    = Array.isArray(parsed) ? []     : (parsed.production || []);
+
+      const defectRecords = defectsArr.map(r => {
+        let cause = String(r.cause || '').trim();
+        let originProc = String(r.originProc || '').trim();
+        if (/수선/.test(cause)) {
+          originProc = '수선';
+          cause = cause.replace(/\s*[\(\[]?\s*수선건?\s*[\)\]]?\s*/g, '').trim();
+        }
+        return {
+          _id: crypto.randomUUID(),
+          product:    String(r.product || '').trim(),
+          size:       String(r.size || '').trim().toUpperCase(),
+          position:   String(r.position || '').trim() || '상',
+          qty:        Number(r.qty) || 0,
+          cause,
+          originProc,
+          action:     String(r.action || '').trim(),
+        };
+      });
+      const prodRecs = prodArr.map(r => ({
+        _id: crypto.randomUUID(),
+        product:  String(r.product || '').trim(),
+        size:     String(r.size || '').trim().toUpperCase(),
+        position: String(r.position || '').trim() || '상',
+        qty:      Number(r.qty) || 0,
+        time:     String(r.time || '').trim(),
+      }));
+      setInputRecords(defectRecords.length ? defectRecords : [makeEmptyBunghalRecord()]);
+      setProductionRecords(prodRecs.length ? prodRecs : [makeEmptyProductionRecord()]);
+      setOriginalRecords(defectRecords.map(r => ({ ...r })));
+
+      // meta 처리 — 일자·작업자 인식
+      const meta = (!Array.isArray(parsed) && parsed.meta) ? parsed.meta : {};
+      const recoDate = String(meta.date || '').trim();
+      const recoOwner = String(meta.owner || '').trim();
+      const dateValid = /^\d{4}-\d{2}-\d{2}$/.test(recoDate);
+      const dateDiff = dateValid && recoDate !== inputDate;
+      const ownerDiff = recoOwner && recoOwner !== inputOwner;
+
+      if (dateDiff || ownerDiff) {
+        const msg = `인식: ${dateValid ? recoDate : '?'} · ${recoOwner || '?'}\n헤더: ${inputDate} · ${inputOwner || '—'}\n\n헤더를 갱신할까요?`;
+        if (confirm(msg)) {
+          skipReloadRef.current = true; // useEffect의 자동 reset 한 번 건너뛰기 — 인식 결과 보존
+          if (dateValid) setInputDate(recoDate);
+          if (recoOwner) handleSaveOwner(recoOwner);
+          toast(`헤더 갱신 → ${dateValid ? recoDate : inputDate} · ${recoOwner || inputOwner}`, 'success');
+        }
+      }
+      toast(`생산 ${prodRecs.length}건 · 부적합 ${defectRecords.length}건 인식 완료 — 검토 후 저장`, 'success');
+    } catch (e) {
+      console.error(e);
+      toast('인식 실패: ' + e.message, 'error');
+    } finally {
+      setRecognizing(false);
+    }
+  };
+
+  // 일자·작업자 변경 시 — 그 일자+작업자 entry 있으면 로드 (date+owner unique key)
+  useEffect(() => {
+    // 인식 직후 헤더 자동 갱신 시 한 번만 건너뛰기 — 인식 결과 보존
+    if (skipReloadRef.current) {
+      skipReloadRef.current = false;
+      return;
+    }
+    const ex = bunghalLog.find(e => e.date === inputDate && (e.owner || '') === (inputOwner || '').trim());
+    setInputRecords(ex && ex.records ? ex.records : [makeEmptyBunghalRecord()]);
+    setProductionRecords(ex && ex.productionRecords ? ex.productionRecords : [makeEmptyProductionRecord()]);
+  }, [inputDate, inputOwner, bunghalLog]);
+
+  const handleSaveOwner = (name) => {
+    setInputOwner(name);
+    localStorage.setItem('kpi_owner_bunghal', name);
+  };
+
+  const openOwnerEdit = () => {
+    setOwnerEditText((catalog.owners || []).join(', '));
+    setOwnerEditOpen(true);
+  };
+
+  const saveOwnerEdit = () => {
+    const list = ownerEditText.split(',').map(s => s.trim()).filter(Boolean);
+    if (!list.length) { toast('작업자 1명 이상 필요', 'warn'); return; }
+    const nextCatalog = { ...catalog, owners: list };
+    onSaveCatalog && onSaveCatalog(nextCatalog);
+    // 현재 선택된 작업자가 새 목록에 없으면 첫 번째로 변경
+    if (!list.includes(inputOwner)) handleSaveOwner(list[0]);
+    setOwnerEditOpen(false);
+    toast('작업자 목록 저장 완료', 'success');
+  };
+
+  const addRecord = () => setInputRecords(rs => [...rs, makeEmptyBunghalRecord()]);
+  const updateRecord = (idx, field, val) => setInputRecords(rs => rs.map((r, i) => i === idx ? { ...r, [field]: val } : r));
+  const removeRecord = (idx) => setInputRecords(rs => rs.filter((_, i) => i !== idx));
+
+  const addProdRecord = () => setProductionRecords(rs => [...rs, makeEmptyProductionRecord()]);
+  const updateProdRecord = (idx, field, val) => setProductionRecords(rs => rs.map((r, i) => i === idx ? { ...r, [field]: val } : r));
+  const removeProdRecord = (idx) => setProductionRecords(rs => rs.filter((_, i) => i !== idx));
+
+  const saveBunghalEntry = () => {
+    if (!inputOwner.trim()) { toast('작업자명을 입력해주세요', 'warn'); return; }
+    const valid = inputRecords.filter(r =>
+      (r.product || '').trim() || (Number(r.qty) || 0) > 0
+    );
+    const validProd = productionRecords.filter(r =>
+      (r.product || '').trim() || (Number(r.qty) || 0) > 0
+    );
+    if (!valid.length && !validProd.length) { toast('입력된 record가 없습니다', 'warn'); return; }
+    const existing = bunghalLog.find(e => e.date === inputDate && (e.owner || '') === (inputOwner || '').trim());
+    const entry = {
+      id: existing?.id || crypto.randomUUID(),
+      date: inputDate,
+      owner: inputOwner || '',
+      records: valid,
+      productionRecords: validProd,
+      createdAt: existing?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const next = existing
+      ? bunghalLog.map(e => e.id === existing.id ? entry : e)
+      : [...bunghalLog, entry];
+    onSaveLog(next);
+
+    // 자가 학습 — 인식 직후 originalRecords와 현재 inputRecords의 차이를 누적
+    if (originalRecords.length && onSaveCorrections) {
+      const diffs = [];
+      const seen = new Set();
+      inputRecords.forEach((cur, i) => {
+        const orig = originalRecords[i];
+        if (!orig) return;
+        ['product', 'size', 'position', 'cause', 'originProc', 'action'].forEach(field => {
+          const o = String(orig[field] || '').trim();
+          const c = String(cur[field] || '').trim();
+          if (o && c && o !== c && !seen.has(`${field}:${o}→${c}`)) {
+            diffs.push({ field, wrong: o, correct: c, date: new Date().toISOString() });
+            seen.add(`${field}:${o}→${c}`);
+          }
+        });
+      });
+      if (diffs.length) {
+        const prev = data.bunghalCorrections || [];
+        // 최근 100개만 유지
+        const merged = [...prev, ...diffs].slice(-100);
+        onSaveCorrections(merged);
+      }
+    }
+
+    // 일간 KPI 자동 동기화 — quiltingDefect / interlockDefect
+    syncDailyKpiFromBunghal(next, inputDate);
+
+    setOriginalRecords([]);
+    setPhotoDataUrl(null);
+    toast(`${inputOwner} · ${inputDate} 저장 완료 — 다음 작업자 있으면 헤더 작업자명 변경`, 'success', { duration: 4500 });
+  };
+
+  // 일간 KPI(production) 자동 동기화 — 그 일자의 모든 작업자 봉탈·생산을 합산해서 봉탈률 계산
+  const syncDailyKpiFromBunghal = (logList, date) => {
+    if (!onSave) return;
+    const sameDayEntries = (logList || []).filter(e => e.date === date);
+    // 그 일자 전체 생산량 + 퀼팅·인터 봉탈 합계
+    const totalProduction = sameDayEntries.reduce((s, e) =>
+      s + (e.productionRecords || []).reduce((ps, r) => ps + (Number(r.qty) || 0), 0), 0);
+    const quiltingDefectQty = sameDayEntries.reduce((s, e) =>
+      s + (e.records || []).filter(r => r.originProc === '퀼팅').reduce((rs, r) => rs + (Number(r.qty) || 0), 0), 0);
+    const interlockDefectQty = sameDayEntries.reduce((s, e) =>
+      s + (e.records || []).filter(r => r.originProc === '인터').reduce((rs, r) => rs + (Number(r.qty) || 0), 0), 0);
+
+    // 봉탈률 계산 (생산량 0이면 null)
+    const quiltingRate  = totalProduction > 0 ? Math.round(quiltingDefectQty  / totalProduction * 10000) / 100 : null;
+    const interlockRate = totalProduction > 0 ? Math.round(interlockDefectQty / totalProduction * 10000) / 100 : null;
+    if (quiltingRate === null && interlockRate === null) return;
+
+    // 그 일자 production entry 찾기 / 새로 만들기
+    const production = data.production || [];
+    const existingProd = production.find(p => p.date === date);
+    const selIso = getISOWeek(date);
+    const baseTasks = existingProd?.tasks ? { ...emptyTasks(), ...existingProd.tasks } : emptyTasks();
+    // quilting.task1 (봉탈률) 만 자동 채움 — task2/task3 등은 손대지 않음
+    baseTasks.quilting = {
+      ...(baseTasks.quilting || {}),
+      task1: {
+        ...((baseTasks.quilting && baseTasks.quilting.task1) || {}),
+        quilting:  quiltingRate ?? ((baseTasks.quilting && baseTasks.quilting.task1) || {}).quilting,
+        interlock: interlockRate ?? ((baseTasks.quilting && baseTasks.quilting.task1) || {}).interlock,
+      },
+    };
+    const flat = tasksToFlatKpis(baseTasks);
+    const entry = {
+      id: existingProd?.id || crypto.randomUUID(),
+      date,
+      year: selIso.year, week: selIso.week,
+      weekKey: `${selIso.year}-W${pad2(selIso.week)}`,
+      owner: existingProd?.owner || '',
+      tasks: baseTasks,
+      ...flat,
+      createdAt: existingProd?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const nextProd = existingProd
+      ? production.map(p => p.id === existingProd.id ? entry : p)
+      : [...production, entry];
+    onSave(nextProd);
+  };
+
+  const deleteBunghalEntry = () => {
+    const existing = bunghalLog.find(e => e.date === inputDate && (e.owner || '') === (inputOwner || '').trim());
+    if (!existing) { toast('이 일자에 등록된 작업일지가 없습니다', 'warn'); return; }
+    if (!confirm(`${inputDate} 작업일지를 삭제할까요? (record ${existing.records?.length || 0}건)`)) return;
+    const next = bunghalLog.filter(e => e.id !== existing.id);
+    onSaveLog(next);
+    setInputRecords([makeEmptyBunghalRecord()]);
+    setProductionRecords([makeEmptyProductionRecord()]);
+    setOriginalRecords([]);
+    syncDailyKpiFromBunghal(next, inputDate);
+    toast(`${inputDate} 작업일지 삭제 완료`, 'info');
+  };
+
+  const deleteBunghalEntryById = (id) => {
+    const target = bunghalLog.find(e => e.id === id);
+    if (!target) return;
+    if (!confirm(`${target.date} · ${target.owner || '—'} 작업일지를 삭제할까요? (record ${target.records?.length || 0}건)`)) return;
+    const next = bunghalLog.filter(e => e.id !== id);
+    onSaveLog(next);
+    syncDailyKpiFromBunghal(next, target.date);
+    toast(`${target.date} · ${target.owner || '—'} 작업일지 삭제 완료`, 'info');
+  };
+
+  const editBunghalEntry = (entry) => {
+    setInputDate(entry.date);
+    setInputOwner(entry.owner || '');
+    setInputOpen(true);
+    // 스크롤 위로 (편집 영역으로)
+    setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 50);
+  };
+
+  const currentEntry = bunghalLog.find(e => e.date === inputDate && (e.owner || '') === (inputOwner || '').trim());
+
+  // 1) bunghalLog → 봉탈 records 추출 (date 필드 포함)
+  const bunghalRecords = useMemo(() => {
+    const out = [];
+    bunghalLog.forEach(entry => {
+      (entry.records || []).forEach(r => {
+        out.push({
+          ...r,
+          date: entry.date,
+          owner: entry.owner,
+        });
+      });
+    });
+    return out;
+  }, [bunghalLog]);
+
+  // bunghalLog → 생산 records 추출
+  const productionRecordsAll = useMemo(() => {
+    const out = [];
+    bunghalLog.forEach(entry => {
+      (entry.productionRecords || []).forEach(r => {
+        out.push({
+          ...r,
+          date: entry.date,
+          owner: entry.owner,
+        });
+      });
+    });
+    return out;
+  }, [bunghalLog]);
+
+  // 2) 사용 가능한 일·주·월 + dataRange
+  const { availableDays, availableWeeks, availableMonths, dataRange } = useMemo(() => {
+    const days = new Set();
+    const weeks = new Map();
+    const months = new Map();
+    bunghalRecords.forEach(r => {
+      if (!r.date) return;
+      days.add(r.date);
+      const w = getISOWeek(r.date);
+      const wk = `${w.year}-W${pad2(w.week)}`;
+      if (!weeks.has(wk)) {
+        const ml = isoWeekToMonthLabel(w.year, w.week);
+        weeks.set(wk, `${ml.year} ${ml.month}월 ${ml.weekOfMonth}주차`);
+      }
+      const ym = r.date.slice(0, 7);
+      if (!months.has(ym)) months.set(ym, `${ym.slice(0,4)}년 ${Number(ym.slice(5,7))}월`);
+    });
+    const ds = [...days].sort();
+    return {
+      availableDays:   ds.slice().reverse(),
+      availableWeeks:  [...weeks.entries()].sort((a,b) => a[0] < b[0] ? 1 : -1),
+      availableMonths: [...months.entries()].sort((a,b) => a[0] < b[0] ? 1 : -1),
+      dataRange:       { min: ds[0] || '', max: ds[ds.length-1] || '' },
+    };
+  }, [bunghalRecords]);
+
+  // 기본 선택 — 데이터의 가장 최근
+  useEffect(() => {
+    if (!selectedWeek && availableWeeks.length)   setSelectedWeek(availableWeeks[0][0]);
+    if (!selectedMonth && availableMonths.length) setSelectedMonth(availableMonths[0][0]);
+    if (!startDate && dataRange.min) setStartDate(dataRange.min);
+    if (!endDate && dataRange.max)   setEndDate(dataRange.max);
+  }, [availableWeeks, availableMonths, dataRange.min, dataRange.max]);
+
+  const [effStart, effEnd] = (startDate && endDate && startDate > endDate) ? [endDate, startDate] : [startDate, endDate];
+
+  // 3) 기간 + 유형 필터로 records 좁히기
+  const filtered = useMemo(() => {
+    let xs = bunghalRecords;
+    if (typeFilter === 'quilting') xs = xs.filter(r => r.originProc === '퀼팅');
+    else if (typeFilter === 'inter') xs = xs.filter(r => r.originProc === '인터');
+
+    if (period === 'day') {
+      xs = xs.filter(r => r.date === selectedDay);
+    } else if (period === 'week' && selectedWeek) {
+      xs = xs.filter(r => {
+        if (!r.date) return false;
+        const w = getISOWeek(r.date);
+        return `${w.year}-W${pad2(w.week)}` === selectedWeek;
+      });
+    } else if (period === 'month' && selectedMonth) {
+      xs = xs.filter(r => (r.date || '').startsWith(selectedMonth));
+    } else if (period === 'range') {
+      xs = xs.filter(r => {
+        if (!r.date) return false;
+        if (effStart && r.date < effStart) return false;
+        if (effEnd && r.date > effEnd) return false;
+        return true;
+      });
+    }
+    return xs;
+  }, [bunghalRecords, typeFilter, period, selectedDay, selectedWeek, selectedMonth, effStart, effEnd]);
+
+  // 4) 품목 × 일자 cross-tab
+  const crossTab = useMemo(() => {
+    const products = new Map();          // product → Map<date, qty>
+    const dateSet = new Set();
+    filtered.forEach(r => {
+      const p = (r.product || '미지정').trim() || '미지정';
+      const d = r.date || '—';
+      dateSet.add(d);
+      if (!products.has(p)) products.set(p, new Map());
+      const m = products.get(p);
+      m.set(d, (m.get(d) || 0) + (Number(r.qty) || 0));
+    });
+    const productList = [...products.entries()].map(([name, m]) => {
+      const total = [...m.values()].reduce((a, b) => a + b, 0);
+      return { name, byDate: m, total };
+    }).sort((a, b) => b.total - a.total);
+    const dateList = [...dateSet].sort();
+    return { productList, dateList };
+  }, [filtered]);
+
+  const totalQty = filtered.reduce((a, r) => a + (Number(r.qty) || 0), 0);
+  const totalRecords = filtered.length;
+
+  // 일별 추세 (라인 차트용)
+  const dailyTrend = useMemo(() => {
+    const map = new Map();
+    filtered.forEach(r => {
+      if (!r.date) return;
+      map.set(r.date, (map.get(r.date) || 0) + (Number(r.qty) || 0));
+    });
+    return [...map.entries()].sort().map(([date, qty]) => ({ date, qty }));
+  }, [filtered]);
+
+  // 원인 분포 (막대)
+  const causeDist = useMemo(() => {
+    const map = new Map();
+    filtered.forEach(r => {
+      const c = (r.cause || '').trim() || '미지정';
+      map.set(c, (map.get(c) || 0) + (Number(r.qty) || 0));
+    });
+    return [...map.entries()].map(([name, qty]) => ({ name, qty })).sort((a, b) => b.qty - a.qty);
+  }, [filtered]);
+
+  // 원인공정 분포 (도넛)
+  const originDist = useMemo(() => {
+    const map = new Map();
+    filtered.forEach(r => {
+      const o = (r.originProc || '').trim() || '미지정';
+      map.set(o, (map.get(o) || 0) + (Number(r.qty) || 0));
+    });
+    return [...map.entries()].map(([name, qty]) => ({ name, qty })).sort((a, b) => b.qty - a.qty);
+  }, [filtered]);
+
+  // 처리내역 분포 (도넛)
+  const actionDist = useMemo(() => {
+    const map = new Map();
+    filtered.forEach(r => {
+      const a = (r.action || '').trim() || '미지정';
+      map.set(a, (map.get(a) || 0) + (Number(r.qty) || 0));
+    });
+    return [...map.entries()].map(([name, qty]) => ({ name, qty })).sort((a, b) => b.qty - a.qty);
+  }, [filtered]);
+
+  // 생산 records 기간 필터 (defects와 동일 기간 적용, 유형 필터는 무관)
+  const filteredProduction = useMemo(() => {
+    let xs = productionRecordsAll;
+    if (period === 'day') {
+      xs = xs.filter(r => r.date === selectedDay);
+    } else if (period === 'week' && selectedWeek) {
+      xs = xs.filter(r => {
+        if (!r.date) return false;
+        const w = getISOWeek(r.date);
+        return `${w.year}-W${pad2(w.week)}` === selectedWeek;
+      });
+    } else if (period === 'month' && selectedMonth) {
+      xs = xs.filter(r => (r.date || '').startsWith(selectedMonth));
+    } else if (period === 'range') {
+      xs = xs.filter(r => {
+        if (!r.date) return false;
+        if (effStart && r.date < effStart) return false;
+        if (effEnd && r.date > effEnd) return false;
+        return true;
+      });
+    }
+    return xs;
+  }, [productionRecordsAll, period, selectedDay, selectedWeek, selectedMonth, effStart, effEnd]);
+
+  const totalProduction = filteredProduction.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+  const overallDefectRate = totalProduction > 0 ? (totalQty / totalProduction * 100) : null;
+
+  // 품목별 불량률 (defect qty / production qty * 100)
+  const defectRateByProduct = useMemo(() => {
+    const prodMap = new Map();
+    filteredProduction.forEach(r => {
+      const p = (r.product || '').trim() || '미지정';
+      prodMap.set(p, (prodMap.get(p) || 0) + (Number(r.qty) || 0));
+    });
+    const defectMap = new Map();
+    filtered.forEach(r => {
+      const p = (r.product || '').trim() || '미지정';
+      defectMap.set(p, (defectMap.get(p) || 0) + (Number(r.qty) || 0));
+    });
+    // 생산량이 있는 품목만 (불량률 계산 가능)
+    const result = [];
+    prodMap.forEach((production, name) => {
+      const defect = defectMap.get(name) || 0;
+      const rate = production > 0 ? (defect / production * 100) : 0;
+      result.push({ name, production, defect, rate });
+    });
+    return result.sort((a, b) => b.rate - a.rate);
+  }, [filtered, filteredProduction]);
+
+  // KPI 요약값
+  const dayCount = crossTab.dateList.length;
+  const dailyAvg = dayCount ? Math.round(totalQty / dayCount * 10) / 10 : 0;
+  const topProduct = crossTab.productList[0];
+  const topOrigin  = originDist[0];
+  const topCause   = causeDist[0];
+
+  // 라벨
+  const periodLabel = (() => {
+    if (period === 'day') {
+      const tag = selectedDay === today ? ' · 오늘' : selectedDay === yesterday ? ' · 어제' : '';
+      return `${selectedDay}${tag}`;
+    }
+    if (period === 'week')  return availableWeeks.find(([k]) => k === selectedWeek)?.[1] || selectedWeek;
+    if (period === 'month') return availableMonths.find(([k]) => k === selectedMonth)?.[1] || selectedMonth;
+    if (period === 'range') return effStart && effEnd ? `${effStart} ~ ${effEnd}` : '기간 선택';
+    return '전체';
+  })();
+
+  // bunghalRecords 없어도 입력 영역은 보여줘야 함 — empty hint는 시각화 부분에서만 처리
+
+  return (
+    <Fragment>
+      {/* 사진 확대 라이트박스 — Portal */}
+      {photoZoomOpen && photoDataUrl && ReactDOM.createPortal(
+        <div onClick={() => setPhotoZoomOpen(false)}
+          className="fixed inset-0 bg-black/85 z-[10000] flex items-center justify-center p-6 animate-fade-in cursor-zoom-out"
+          style={{ backdropFilter: 'blur(4px)' }}>
+          <img src={photoDataUrl} alt="작업일지 확대"
+            onClick={(e) => e.stopPropagation()}
+            className="max-w-full max-h-full rounded-lg shadow-2xl cursor-default"
+            style={{ objectFit: 'contain' }} />
+          <button onClick={() => setPhotoZoomOpen(false)}
+            className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white text-xl flex items-center justify-center backdrop-blur-md transition-colors">
+            ×
+          </button>
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 text-white/70 text-xs">
+            배경 클릭 · ESC · × 버튼으로 닫기
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* 시각화 영역 — 분석 모드에서만 */}
+      {isAnalysis && (<Fragment>
+      {/* 헤더 + 토글 */}
+      <Card>
+        <div className="p-4 flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <div className="text-sm font-bold text-slate-800">봉탈 집중 분석</div>
+            <div className="text-[11px] text-slate-500 mt-0.5 num">{periodLabel}</div>
+            <div className="text-[10px] text-slate-400 mt-0.5 num">{totalQty.toLocaleString('ko-KR')}건 발생 · 품목 {crossTab.productList.length}종 · record {totalRecords}건</div>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* 유형 토글 */}
+            <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
+              {[
+                { v:'both',     l:'전체 봉탈' },
+                { v:'quilting', l:'퀼팅' },
+                { v:'inter',    l:'인터' },
+              ].map(o => (
+                <button key={o.v} onClick={() => setTypeFilter(o.v)}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors
+                    ${typeFilter === o.v ? 'bg-white text-violet-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                  {o.l}
+                </button>
+              ))}
+            </div>
+            {/* 기간 토글 */}
+            <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
+              {[
+                { v:'day',   l:'일별' },
+                { v:'week',  l:'주별' },
+                { v:'month', l:'월별' },
+                { v:'range', l:'기간' },
+                { v:'all',   l:'전체' },
+              ].map(o => (
+                <button key={o.v} onClick={() => setPeriod(o.v)}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors
+                    ${period === o.v ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                  {o.l}
+                </button>
+              ))}
+            </div>
+            {period === 'day' && (
+              <DateRangePicker mode="single"
+                startDate={selectedDay}
+                onChange={(d) => d && setSelectedDay(d)}
+                max={today}
+                accent="indigo" />
+            )}
+            {period === 'week' && availableWeeks.length > 0 && (
+              <select value={selectedWeek} onChange={e => setSelectedWeek(e.target.value)}
+                className="px-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                {availableWeeks.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+            )}
+            {period === 'month' && availableMonths.length > 0 && (
+              <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}
+                className="px-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                {availableMonths.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              </select>
+            )}
+            {period === 'range' && (
+              <DateRangePicker
+                startDate={startDate} endDate={endDate}
+                onChange={(s, e) => { setStartDate(s); setEndDate(e); }}
+                min={dataRange.min} max={dataRange.max} />
+            )}
+          </div>
+        </div>
+      </Card>
+      </Fragment>)}
+
+      {/* 작업일지 입력 영역 — 기록 모드만 */}
+      {isRecord && (<Fragment>
+      <Card>
+        <div className="w-full px-5 py-3 flex items-center gap-3 flex-wrap">
+          <button onClick={() => setInputOpen(o => !o)}
+            className="flex items-center gap-2 hover:bg-slate-50 transition-colors px-2 py-1.5 rounded -ml-2">
+            <Icon name={inputOpen ? 'chevronDown' : 'chevronRight'} size={16} className="text-slate-400" />
+            <span className="text-sm font-bold text-slate-700">작업일지 입력</span>
+          </button>
+          <div className="inline-flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+            <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">작업일자</span>
+            <DateRangePicker mode="single" startDate={inputDate}
+              onChange={(d) => d && setInputDate(d)} max={today} accent="indigo" />
+          </div>
+          <div className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 ${inputOwner.trim() ? 'bg-slate-50 border border-slate-200' : 'bg-rose-50/40 border border-dashed border-rose-300'}`}>
+            <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">작업자</span>
+            <select value={inputOwner} onChange={e => handleSaveOwner(e.target.value)}
+              className="px-1.5 py-0.5 text-xs bg-transparent focus:outline-none num min-w-[60px]">
+              <option value="">선택</option>
+              {(catalog.owners || []).map(o => <option key={o} value={o}>{o}</option>)}
+              {inputOwner && !(catalog.owners || []).includes(inputOwner) && (
+                <option value={inputOwner}>{inputOwner}</option>
+              )}
+            </select>
+            <button onClick={openOwnerEdit}
+              title="작업자 목록 편집"
+              className="text-slate-400 hover:text-slate-700 text-xs leading-none">✎</button>
+          </div>
+          {currentEntry && (
+            <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+              등록됨 · {currentEntry.records?.length || 0}건
+            </span>
+          )}
+          {ownerEditOpen && (
+            <div className="basis-full mt-2 p-3 bg-white border border-slate-200 rounded-lg flex items-center gap-2 animate-slide-down">
+              <span className="text-[10px] text-slate-500 font-semibold whitespace-nowrap">작업자 목록 (콤마로 구분)</span>
+              <input type="text" value={ownerEditText} onChange={e => setOwnerEditText(e.target.value)}
+                placeholder="진아라, 옥사나, …"
+                onKeyDown={e => e.key === 'Enter' && saveOwnerEdit()}
+                className="flex-1 px-2 py-1 text-xs border border-slate-200 rounded focus:outline-none focus:ring-2 focus:ring-violet-300" />
+              <button onClick={saveOwnerEdit}
+                className="px-3 py-1.5 text-[10px] font-semibold rounded bg-violet-500 hover:bg-violet-600 text-white">저장</button>
+              <button onClick={() => setOwnerEditOpen(false)}
+                className="px-2 py-1.5 text-[10px] rounded bg-slate-100 hover:bg-slate-200 text-slate-600">취소</button>
+            </div>
+          )}
+        </div>
+        {inputOpen && (
+          <div className="px-5 pb-5 pt-1 border-t border-slate-100 animate-slide-down">
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 mb-4">
+            {/* 사진 영역 — paste / 파일 선택 / 자동 인식 */}
+            <div className="lg:col-span-2 border border-dashed border-slate-300 rounded-lg p-3 bg-slate-50/40">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs font-semibold text-slate-600 flex items-center gap-2">
+                  <Icon name="upload" size={12} className="text-slate-400" />
+                  작업일지 사진 (Ctrl+V 붙여넣기 또는 파일 선택)
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={openKeyEditor}
+                    className={`text-[11px] px-2 py-1 rounded flex items-center gap-1 ${apiKey ? 'text-slate-500 hover:bg-slate-100' : 'text-rose-600 bg-rose-50 hover:bg-rose-100 font-semibold'}`}>
+                    <span>🔒</span>
+                    {apiKey ? 'API 키 관리' : '⚠ API 키 등록'}
+                  </button>
+                  <input ref={fileRef} type="file" accept="image/*" className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) onPickFile(f); e.target.value = ''; }} />
+                  <button onClick={() => fileRef.current?.click()}
+                    className="text-[11px] px-2 py-1 rounded text-slate-600 hover:bg-slate-100">파일 선택</button>
+                  {photoDataUrl && (
+                    <button onClick={() => { setPhotoDataUrl(null); setOriginalRecords([]); }}
+                      className="text-[11px] px-2 py-1 rounded text-slate-500 hover:bg-slate-100">사진 제거</button>
+                  )}
+                </div>
+              </div>
+              {/* 비밀번호 설정 (최초) */}
+              {keyPassMode === 'set' && (
+                <div className="mb-2 p-3 bg-white border border-rose-200 rounded-md">
+                  <div className="text-[11px] font-semibold text-rose-700 mb-2 flex items-center gap-1.5">
+                    🔐 API 키 보호용 비밀번호 설정 (최소 4자)
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input type="password" value={passInput} onChange={e => setPassInput(e.target.value)}
+                      placeholder="새 비밀번호"
+                      className="flex-1 px-2 py-1 text-xs border border-slate-200 rounded focus:outline-none focus:ring-2 focus:ring-rose-300" />
+                    <input type="password" value={passInput2} onChange={e => setPassInput2(e.target.value)}
+                      placeholder="비밀번호 확인" onKeyDown={e => e.key === 'Enter' && handleSetPassword()}
+                      className="flex-1 px-2 py-1 text-xs border border-slate-200 rounded focus:outline-none focus:ring-2 focus:ring-rose-300" />
+                    <button onClick={handleSetPassword}
+                      className="text-[10px] px-3 py-1.5 rounded bg-rose-500 hover:bg-rose-600 text-white font-semibold">설정</button>
+                    <button onClick={closeKeyEditor}
+                      className="text-[10px] px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600">취소</button>
+                  </div>
+                  {passError && <div className="text-[10px] text-rose-600 mt-1.5">{passError}</div>}
+                </div>
+              )}
+              {/* 비밀번호 확인 (잠금 해제) */}
+              {keyPassMode === 'verify' && (
+                <div className="mb-2 p-3 bg-white border border-amber-200 rounded-md">
+                  <div className="text-[11px] font-semibold text-amber-700 mb-2 flex items-center gap-1.5">
+                    🔓 비밀번호 입력 — API 키 조회·변경
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input type="password" value={passInput} onChange={e => setPassInput(e.target.value)}
+                      placeholder="비밀번호" onKeyDown={e => e.key === 'Enter' && handleVerifyPassword()}
+                      autoFocus
+                      className="flex-1 px-2 py-1 text-xs border border-slate-200 rounded focus:outline-none focus:ring-2 focus:ring-amber-300" />
+                    <button onClick={handleVerifyPassword}
+                      className="text-[10px] px-3 py-1.5 rounded bg-amber-500 hover:bg-amber-600 text-white font-semibold">확인</button>
+                    <button onClick={handleResetPassword}
+                      className="text-[10px] px-2 py-1 rounded text-rose-600 hover:bg-rose-50">초기화</button>
+                    <button onClick={closeKeyEditor}
+                      className="text-[10px] px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-600">취소</button>
+                  </div>
+                  {passError && <div className="text-[10px] text-rose-600 mt-1.5">{passError}</div>}
+                </div>
+              )}
+              {/* 키 입력 (잠금 해제 후) */}
+              {keyUnlocked && (
+                <div className="mb-2 p-3 bg-white border border-emerald-200 rounded-md">
+                  <div className="text-[11px] font-semibold text-emerald-700 mb-2 flex items-center gap-1.5">
+                    🔓 API 키 변경 가능 — 잠금 해제됨
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input type="text" value={apiKey} onChange={e => setApiKey(e.target.value)}
+                      placeholder="AIza..."
+                      className="flex-1 px-2 py-1 text-xs border border-slate-200 rounded focus:outline-none focus:ring-2 focus:ring-emerald-300 num" />
+                    <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener"
+                      className="text-[10px] text-violet-600 hover:underline whitespace-nowrap">키 발급</a>
+                    <button onClick={closeKeyEditor}
+                      className="text-[10px] px-3 py-1.5 rounded bg-emerald-500 hover:bg-emerald-600 text-white font-semibold">잠금</button>
+                  </div>
+                </div>
+              )}
+              <div ref={pasteRef} tabIndex={0} onPaste={onPasteImage}
+                className="rounded-md border border-slate-200 bg-white p-2 cursor-text focus:outline-none focus:ring-2 focus:ring-violet-300">
+                {photoDataUrl ? (
+                  <div className="space-y-2">
+                    <div className="relative w-full flex justify-center">
+                      <div className="relative inline-block">
+                        <img src={photoDataUrl} alt="작업일지"
+                          onClick={(e) => { e.stopPropagation(); setPhotoZoomOpen(true); }}
+                          title="클릭하여 확대"
+                          className="max-h-60 w-auto rounded shadow-sm cursor-zoom-in hover:opacity-90 transition-opacity" />
+                        {/* 인식 중 스캔 라인 오버레이 */}
+                        {recognizing && (
+                          <div className="absolute inset-0 overflow-hidden rounded pointer-events-none">
+                            <div className="absolute inset-0 bg-violet-500/5"></div>
+                            <div className="absolute left-0 right-0 h-1 bg-gradient-to-r from-transparent via-violet-400 to-transparent shadow-[0_0_10px_2px_rgba(139,92,246,0.7)] animate-scan-line"></div>
+                            <div className="absolute inset-0 ring-2 ring-violet-400/40 ring-inset rounded animate-pulse"></div>
+                          </div>
+                        )}
+                        <button onClick={(e) => { e.stopPropagation(); runRecognition(); }} disabled={recognizing}
+                          className="absolute top-2 right-2 px-3 py-1.5 text-xs font-semibold rounded-lg bg-gradient-to-r from-violet-500 to-indigo-500 text-white hover:from-violet-600 hover:to-indigo-600 shadow-md shadow-violet-500/20 disabled:opacity-90 flex items-center gap-1.5 z-10">
+                          {recognizing ? <Fragment>⏳ 인식 중…</Fragment> : <Fragment>🤖 자동 인식</Fragment>}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="text-[10px] text-slate-400 leading-relaxed text-center">
+                      인식 후 표에 자동 채워지면 검토·수정 후 저장 · 수정 내용은 다음 인식에 자동 반영
+                    </div>
+                  </div>
+                ) : (
+                  <div className="py-6 text-xs text-slate-400 text-center">
+                    이 영역에 포커스 후 <span className="font-semibold text-slate-600">Ctrl+V</span>로 사진 붙여넣기 · 또는 우상단 "파일 선택"
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 우측 컬럼 — 추가 버튼 + 표 */}
+            <div className="lg:col-span-3 flex flex-col">
+
+            {/* 저장 버튼 (상단) */}
+            <div className="flex items-center gap-3 flex-wrap mb-3">
+              <div className="ml-auto flex items-center gap-2">
+                {currentEntry && (
+                  <button onClick={deleteBunghalEntry}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50">
+                    삭제
+                  </button>
+                )}
+                <button onClick={saveBunghalEntry}
+                  className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-gradient-to-r from-sky-500 to-cyan-500 text-white hover:from-sky-600 hover:to-cyan-600 shadow shadow-sky-500/20 flex items-center gap-1.5">
+                  <Icon name="check" size={12} />{currentEntry ? '수정 저장' : '신규 저장'}
+                </button>
+              </div>
+            </div>
+
+            {/* 생산량 표 (상단) */}
+            <div className="mb-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="text-[11px] font-bold text-slate-600 flex items-center gap-1.5">
+                  <span className="w-1 h-3 bg-emerald-500 rounded"></span>
+                  생산량 (작업일지 상단)
+                </div>
+                <button onClick={addProdRecord}
+                  className="text-[10px] px-2 py-1 rounded text-emerald-600 hover:bg-emerald-50 font-semibold">+ 행 추가</button>
+              </div>
+              <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-emerald-50/40 text-slate-500">
+                      <th className="px-2 py-2 text-center font-semibold w-[40px]">No</th>
+                      <th className="px-2 py-2 text-left font-semibold">품목</th>
+                      <th className="px-2 py-2 text-left font-semibold w-[80px]">사이즈</th>
+                      <th className="px-2 py-2 text-left font-semibold w-[60px]">상/하</th>
+                      <th className="px-2 py-2 text-right font-semibold w-[80px]">수량</th>
+                      <th className="px-2 py-2 text-left font-semibold w-[150px]">작업시간</th>
+                      <th className="px-2 py-2 w-[40px]"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {productionRecords.length === 0 && (
+                      <tr><td colSpan={7} className="px-3 py-4 text-center text-slate-400">행을 추가하세요.</td></tr>
+                    )}
+                    {productionRecords.map((r, i) => {
+                      const empty = (v) => v === '' || v === null || v === undefined;
+                      const emptyNum = (v) => empty(v) || Number(v) <= 0;
+                      const cellCls = (isEmpty) => `w-full px-2 py-1 border rounded text-xs focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-slate-200 ${isEmpty ? 'border-dashed border-rose-300 bg-rose-50/30' : 'border-transparent hover:border-slate-200'}`;
+                      return (
+                        <tr key={r._id || i} className="border-t border-slate-100 hover:bg-emerald-50/20">
+                          <td className="px-2 py-1 text-center text-slate-400 num">{i+1}</td>
+                          <td className="px-1 py-1">
+                            <input type="text" list="catalog-products" value={r.product || ''}
+                              onChange={e => updateProdRecord(i, 'product', e.target.value)}
+                              placeholder="이브닝, 쿠시노…"
+                              className={cellCls(empty(r.product))} />
+                          </td>
+                          <td className="px-1 py-1">
+                            <input type="text" list="catalog-sizes" value={r.size || ''}
+                              onChange={e => updateProdRecord(i, 'size', e.target.value.toUpperCase())}
+                              placeholder="SS"
+                              className={cellCls(empty(r.size)) + ' num'} />
+                          </td>
+                          <td className="px-1 py-1">
+                            <select value={r.position || ''}
+                              onChange={e => updateProdRecord(i, 'position', e.target.value)}
+                              className={cellCls(empty(r.position))}>
+                              <option value="">—</option>
+                              {catalog.positions.map(p => <option key={p} value={p}>{p}</option>)}
+                              {r.position && !catalog.positions.includes(r.position) && (
+                                <option value={r.position}>{r.position}</option>
+                              )}
+                            </select>
+                          </td>
+                          <td className="px-1 py-1">
+                            <input type="number" min="0" value={r.qty ?? ''}
+                              onChange={e => updateProdRecord(i, 'qty', e.target.value === '' ? '' : Number(e.target.value) || 0)}
+                              placeholder="0"
+                              className={cellCls(emptyNum(r.qty)) + ' text-right num'} />
+                          </td>
+                          <td className="px-1 py-1">
+                            <input type="text" value={r.time || ''}
+                              onChange={e => updateProdRecord(i, 'time', e.target.value)}
+                              placeholder="8:40-10:25"
+                              className="w-full px-2 py-1 border border-transparent hover:border-slate-200 rounded text-xs num focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-slate-200" />
+                          </td>
+                          <td className="px-1 py-1 text-center">
+                            <button onClick={() => removeProdRecord(i)}
+                              className="text-slate-400 hover:text-rose-600 text-base leading-none">×</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {productionRecords.length > 0 && (
+                      <tr className="border-t-2 border-emerald-200 bg-emerald-50/50 font-bold">
+                        <td colSpan={4} className="px-2 py-2 text-right text-emerald-800 text-[11px]">합계</td>
+                        <td className="px-2 py-2 text-right text-emerald-900 num">
+                          {productionRecords.reduce((s, r) => s + (Number(r.qty) || 0), 0)}
+                        </td>
+                        <td colSpan={2}></td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* 부적합 표 헤더 */}
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="text-[11px] font-bold text-slate-600 flex items-center gap-1.5">
+                <span className="w-1 h-3 bg-rose-500 rounded"></span>
+                부적합 (작업일지 하단)
+              </div>
+              <button onClick={addRecord}
+                className="text-[10px] px-2 py-1 rounded text-rose-600 hover:bg-rose-50 font-semibold">+ 행 추가</button>
+            </div>
+
+            {/* 부적합 record 표 */}
+            <div className="overflow-x-auto border border-slate-200 rounded-lg">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-500">
+                    <th className="px-2 py-2 text-center font-semibold w-[40px]">No</th>
+                    <th className="px-2 py-2 text-left font-semibold">품목</th>
+                    <th className="px-2 py-2 text-left font-semibold w-[80px]">사이즈</th>
+                    <th className="px-2 py-2 text-left font-semibold w-[60px]">상/하</th>
+                    <th className="px-2 py-2 text-right font-semibold w-[80px]">수량</th>
+                    <th className="px-2 py-2 text-left font-semibold">원인</th>
+                    <th className="px-2 py-2 text-left font-semibold w-[90px]">원인공정</th>
+                    <th className="px-2 py-2 text-left font-semibold w-[90px]">처리내역</th>
+                    <th className="px-2 py-2 w-[40px]"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {inputRecords.length === 0 && (
+                    <tr><td colSpan={9} className="px-3 py-8 text-center text-slate-400">행을 추가하세요.</td></tr>
+                  )}
+                  {inputRecords.map((r, i) => {
+                    const empty = (v) => v === '' || v === null || v === undefined;
+                    const emptyNum = (v) => empty(v) || Number(v) <= 0;
+                    const cellCls = (isEmpty) => `w-full px-2 py-1 border rounded text-xs focus:outline-none focus:ring-2 focus:ring-violet-300 focus:border-slate-200 ${isEmpty ? 'border-dashed border-rose-300 bg-rose-50/30' : 'border-transparent hover:border-slate-200'}`;
+                    return (
+                      <tr key={r._id || i} className="border-t border-slate-100 hover:bg-violet-50/20">
+                        <td className="px-2 py-1 text-center text-slate-400 num">{i+1}</td>
+                        <td className="px-1 py-1">
+                          <input type="text" list="catalog-products" value={r.product || ''}
+                            onChange={e => updateRecord(i, 'product', e.target.value)}
+                            placeholder="이브닝, 쿠시노…"
+                            className={cellCls(empty(r.product))} />
+                        </td>
+                        <td className="px-1 py-1">
+                          <input type="text" list="catalog-sizes" value={r.size || ''}
+                            onChange={e => updateRecord(i, 'size', e.target.value.toUpperCase())}
+                            placeholder="SS"
+                            className={cellCls(empty(r.size)) + ' num'} />
+                        </td>
+                        <td className="px-1 py-1">
+                          <select value={r.position || ''}
+                            onChange={e => updateRecord(i, 'position', e.target.value)}
+                            className={cellCls(empty(r.position))}>
+                            <option value="">—</option>
+                            {catalog.positions.map(p => <option key={p} value={p}>{p}</option>)}
+                            {r.position && !catalog.positions.includes(r.position) && (
+                              <option value={r.position}>{r.position}</option>
+                            )}
+                          </select>
+                        </td>
+                        <td className="px-1 py-1">
+                          <input type="number" min="0" value={r.qty ?? ''}
+                            onChange={e => updateRecord(i, 'qty', e.target.value === '' ? '' : Number(e.target.value) || 0)}
+                            placeholder="0"
+                            className={cellCls(emptyNum(r.qty)) + ' text-right num'} />
+                        </td>
+                        <td className="px-1 py-1">
+                          <input type="text" list="catalog-causes" value={r.cause || ''}
+                            onChange={e => updateRecord(i, 'cause', e.target.value)}
+                            placeholder="봉탈, 재작업 부족…"
+                            className={cellCls(empty(r.cause))} />
+                        </td>
+                        <td className="px-1 py-1">
+                          <input type="text" list="catalog-origins" value={r.originProc || ''}
+                            onChange={e => updateRecord(i, 'originProc', e.target.value)}
+                            placeholder="퀼팅"
+                            className={cellCls(empty(r.originProc))} />
+                        </td>
+                        <td className="px-1 py-1">
+                          <input type="text" list="catalog-actions" value={r.action || ''}
+                            onChange={e => updateRecord(i, 'action', e.target.value)}
+                            placeholder="수선"
+                            className={cellCls(empty(r.action))} />
+                        </td>
+                        <td className="px-1 py-1 text-center">
+                          <button onClick={() => removeRecord(i)}
+                            className="text-slate-400 hover:text-rose-600 text-base leading-none">×</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            </div> {/* 우측 컬럼 끝 */}
+            </div> {/* grid 끝 */}
+
+            {/* datalist 자동완성 — catalog 기반 */}
+            <datalist id="catalog-products">{catalog.products.map(p => <option key={p} value={p} />)}</datalist>
+            <datalist id="catalog-sizes">{catalog.sizes.map(s => <option key={s} value={s} />)}</datalist>
+            <datalist id="catalog-positions">{catalog.positions.map(p => <option key={p} value={p} />)}</datalist>
+            <datalist id="catalog-causes">{(catalog.causes || []).map(c => <option key={c} value={c} />)}</datalist>
+            <datalist id="catalog-origins">{(catalog.origins || []).map(o => <option key={o} value={o} />)}</datalist>
+            <datalist id="catalog-actions">{(catalog.actions || []).map(a => <option key={a} value={a} />)}</datalist>
+          </div>
+        )}
+      </Card>
+
+      {/* 등록된 작업일지 이력 */}
+      {bunghalLog.length > 0 && (
+        <Card>
+          <CardHeader title={`등록된 작업일지 · ${bunghalLog.length}건`} sub="최근 순 · 최대 30건 표시" />
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-slate-50 text-slate-500">
+                  <th className="px-3 py-2 text-left font-semibold">일자</th>
+                  <th className="px-3 py-2 text-left font-semibold">요일</th>
+                  <th className="px-3 py-2 text-left font-semibold">작업자</th>
+                  <th className="px-3 py-2 text-right font-semibold">record</th>
+                  <th className="px-3 py-2 text-right font-semibold">총 발생</th>
+                  <th className="px-3 py-2 text-left font-semibold">최종 저장</th>
+                  <th className="px-3 py-2 text-center font-semibold w-[120px]">동작</th>
+                </tr>
+              </thead>
+              <tbody className="num">
+                {[...bunghalLog].sort((a, b) => {
+                  // 일자 내림차순, 같으면 updatedAt 내림차순
+                  if ((a.date || '') !== (b.date || '')) return (a.date || '') < (b.date || '') ? 1 : -1;
+                  return (a.updatedAt || '') < (b.updatedAt || '') ? 1 : -1;
+                }).slice(0, 30).map(e => {
+                  const dow = e.date ? ['일','월','화','수','목','금','토'][parseYMD(e.date).getDay()] : '';
+                  const dowCls = dow === '일' ? 'text-rose-500' : dow === '토' ? 'text-blue-500' : 'text-slate-500';
+                  const totalQty = (e.records || []).reduce((s, r) => s + (Number(r.qty) || 0), 0);
+                  const isCurrent = e.date === inputDate && (e.owner || '') === (inputOwner || '').trim();
+                  return (
+                    <tr key={e.id} className={`border-t border-slate-100 hover:bg-violet-50/30 ${isCurrent ? 'bg-violet-50/50' : ''}`}>
+                      <td className="px-3 py-2 text-slate-700 font-semibold whitespace-nowrap">{e.date}</td>
+                      <td className={`px-3 py-2 whitespace-nowrap ${dowCls}`}>{dow ? `${dow}요일` : '—'}</td>
+                      <td className="px-3 py-2 text-slate-700">{e.owner || '—'}</td>
+                      <td className="px-3 py-2 text-right text-slate-700">{e.records?.length || 0}건</td>
+                      <td className="px-3 py-2 text-right text-violet-700 font-bold">{totalQty}건</td>
+                      <td className="px-3 py-2 text-slate-400 text-[10px]">{fmtDateTime(e.updatedAt || e.createdAt)}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center justify-center gap-1">
+                          <button onClick={() => editBunghalEntry(e)}
+                            className="px-2 py-1 text-[11px] font-semibold rounded text-sky-600 hover:bg-sky-50">편집</button>
+                          <button onClick={() => deleteBunghalEntryById(e.id)}
+                            className="px-2 py-1 text-[11px] font-semibold rounded text-rose-600 hover:bg-rose-50">삭제</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+      </Fragment>)}
+
+      {/* 시각화 cross-tab + Top — 분석 모드만 */}
+      {isAnalysis && (!filtered.length ? (
+        <EmptyHint iconName="shield" msg={bunghalRecords.length
+          ? `${periodLabel}에 해당하는 봉탈 record가 없습니다.`
+          : '작업일지 데이터가 없습니다. 위 입력 영역에서 등록해주세요.'} />
+      ) : (
+        <Fragment>
+          {/* KPI 요약 카드 5장 */}
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+            <BunghalKpiCard label="총 발생 건수" value={totalQty} suffix="건"
+              sub={`record ${totalRecords}건 · ${dayCount}일`}
+              icon={<Icon name="shield" size={14} />} color="violet" delay={0} />
+            <BunghalKpiCard label="종합 불량률"
+              value={overallDefectRate !== null ? overallDefectRate.toFixed(2) : '—'} suffix="%"
+              sub={totalProduction ? `생산 ${totalProduction.toLocaleString('ko-KR')}건 대비` : '생산 데이터 없음'}
+              icon={<Icon name="trending" size={14} />} color="rose" delay={60} />
+            <BunghalKpiCard label="일 평균 발생" value={dailyAvg} suffix="건/일"
+              sub={`${dayCount}일 기준`}
+              icon={<Icon name="dashboard" size={14} />} color="emerald" delay={120} />
+            <BunghalKpiCard label="최다 품목"
+              value={topProduct?.name || '—'}
+              sub={topProduct ? `${topProduct.total}건 · 전체의 ${Math.round(topProduct.total / totalQty * 100)}%` : ''}
+              icon={<Icon name="target" size={14} />} color="amber" delay={180} />
+            <BunghalKpiCard label="주요 원인공정"
+              value={topOrigin?.name || '—'}
+              sub={topOrigin ? `${topOrigin.qty}건 · 전체의 ${Math.round(topOrigin.qty / totalQty * 100)}%` : ''}
+              icon={<Icon name="factory" size={14} />} color="fuchsia" delay={240} />
+          </div>
+
+          {/* 일별 추세 + 도넛 2개 — 같은 행 */}
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-5 items-stretch">
+            <Card className="lg:col-span-2" delay={240}>
+              <CardHeader title="일별 봉탈 발생 추세" sub={periodLabel} />
+              <div className="p-5">
+                <BunghalTrendChart trend={dailyTrend} />
+              </div>
+            </Card>
+            <Card delay={300}>
+              <CardHeader title="원인공정 분포" sub={`${totalQty.toLocaleString('ko-KR')}건 · 발생 기준`} />
+              <div className="p-5">
+                <BunghalDonutChart items={originDist}
+                  palette={['#8B5CF6', '#EC4899', '#F59E0B', '#10B981']} />
+              </div>
+            </Card>
+            <Card delay={360}>
+              <CardHeader title="처리내역 분포" sub={`${totalQty.toLocaleString('ko-KR')}건 · 수선 vs 폐기`} />
+              <div className="p-5">
+                <BunghalDonutChart items={actionDist}
+                  palette={['#10B981', '#F43F5E', '#94A3B8']} />
+              </div>
+            </Card>
+          </div>
+
+          {/* 원인 Top 5 + 품목 Top 5 + 품목별 불량률 Top 5 */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            <Card delay={420}>
+              <CardHeader title="원인 Top 5" sub="가장 빈번한 원인" />
+              <div className="p-5 space-y-2.5">
+                {causeDist.slice(0, 5).map((c, i) => {
+                  const maxQty = causeDist[0]?.qty || 1;
+                  const pct = (c.qty / maxQty) * 100;
+                  const colors = ['from-rose-400 to-rose-600', 'from-orange-400 to-orange-600', 'from-amber-400 to-amber-600', 'from-fuchsia-400 to-fuchsia-600', 'from-violet-400 to-violet-600'];
+                  return (
+                    <div key={c.name}>
+                      <div className="flex items-baseline justify-between text-xs mb-1.5">
+                        <span className="text-slate-700 font-medium truncate" title={c.name}>
+                          <span className="text-slate-400 num mr-1.5">{i+1}.</span>{c.name}
+                        </span>
+                        <span className="num font-bold text-slate-800">{c.qty}건</span>
+                      </div>
+                      <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                        <div className={`h-full bg-gradient-to-r ${colors[i % colors.length]} rounded-full transition-all`}
+                             style={{ width: `${pct}%` }}></div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!causeDist.length && (
+                  <div className="text-xs text-slate-400 text-center py-6">데이터 없음</div>
+                )}
+              </div>
+            </Card>
+            <Card delay={480}>
+              <CardHeader title="품목 Top 5" sub={`${crossTab.productList.length}종 중 상위 · 건수 내림차순`} />
+              <div className="p-5 space-y-2.5">
+                {crossTab.productList.slice(0, 5).map((p, i) => {
+                  const maxTotal = crossTab.productList[0]?.total || 1;
+                  const pct = (p.total / maxTotal) * 100;
+                  const rankColor = i === 0 ? 'text-rose-600 bg-rose-50' : i === 1 ? 'text-amber-600 bg-amber-50' : i === 2 ? 'text-violet-600 bg-violet-50' : 'text-slate-400 bg-slate-50';
+                  const pctOfTotal = totalQty ? Math.round(p.total / totalQty * 100) : 0;
+                  return (
+                    <div key={p.name}>
+                      <div className="flex items-baseline justify-between text-xs mb-1.5">
+                        <span className="text-slate-700 font-medium truncate flex items-baseline gap-1.5" title={p.name}>
+                          <span className={`text-[10px] num font-bold px-1.5 py-0.5 rounded ${rankColor}`}>{i+1}</span>
+                          {p.name}
+                        </span>
+                        <span className="num text-slate-500 shrink-0">
+                          <span className="font-bold text-violet-700">{p.total}</span>
+                          <span className="text-[10px] text-slate-400 ml-1">({pctOfTotal}%)</span>
+                        </span>
+                      </div>
+                      <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                        <div className="h-full bg-gradient-to-r from-violet-400 to-violet-600 rounded-full transition-all"
+                             style={{ width: `${pct}%` }}></div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!crossTab.productList.length && (
+                  <div className="text-xs text-slate-400 text-center py-6">데이터 없음</div>
+                )}
+              </div>
+            </Card>
+
+            <Card delay={540}>
+              <CardHeader title="품목 불량률 Top 5" sub="생산 대비 봉탈 % · 상대 위험" />
+              <div className="p-5 space-y-2.5">
+                {defectRateByProduct.slice(0, 5).map((p, i) => {
+                  const maxRate = defectRateByProduct[0]?.rate || 1;
+                  const pct = (p.rate / maxRate) * 100;
+                  const rateColor = p.rate >= 10 ? 'text-rose-700' : p.rate >= 5 ? 'text-amber-700' : p.rate >= 2 ? 'text-violet-700' : 'text-emerald-700';
+                  const barColor = p.rate >= 10 ? 'from-rose-400 to-rose-600' : p.rate >= 5 ? 'from-amber-400 to-orange-500' : p.rate >= 2 ? 'from-violet-400 to-violet-600' : 'from-emerald-400 to-teal-500';
+                  const rankColor = i === 0 ? 'text-rose-600 bg-rose-50' : i === 1 ? 'text-amber-600 bg-amber-50' : i === 2 ? 'text-violet-600 bg-violet-50' : 'text-slate-400 bg-slate-50';
+                  return (
+                    <div key={p.name}>
+                      <div className="flex items-baseline justify-between text-xs mb-1.5">
+                        <span className="text-slate-700 font-medium truncate flex items-baseline gap-1.5" title={p.name}>
+                          <span className={`text-[10px] num font-bold px-1.5 py-0.5 rounded ${rankColor}`}>{i+1}</span>
+                          {p.name}
+                        </span>
+                        <span className="num shrink-0 text-right">
+                          <span className={`font-bold ${rateColor}`}>{p.rate.toFixed(2)}%</span>
+                          <span className="text-[10px] text-slate-400 ml-1 block">{p.defect}/{p.production}</span>
+                        </span>
+                      </div>
+                      <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                        <div className={`h-full bg-gradient-to-r ${barColor} rounded-full transition-all`}
+                             style={{ width: `${pct}%` }}></div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!defectRateByProduct.length && (
+                  <div className="text-xs text-slate-400 text-center py-6">
+                    생산량 데이터가 없습니다
+                    <div className="text-[10px] mt-1">봉탈 기록에 생산 표 입력 후 다시 확인</div>
+                  </div>
+                )}
+              </div>
+            </Card>
+          </div>
+        </Fragment>
+      ))}
     </Fragment>
   );
 }
