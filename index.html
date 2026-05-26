@@ -129,6 +129,7 @@ const KPI_DEFS = [
     color: '#F59E0B', soft: '#FEF3C7', dark: '#B45309',
     desc: '발포 공정에서 투입 대비 양품 비율',
     target: 92, warn: 90, danger: 88,
+    excludeZeroFromAvg: true,  // 0은 미측정/입력 실수 가능성 — 평균 계산에서 제외
   },
   {
     key: 'foamInsourcing', label: '외주 폼 내작 진행률', short: '내작 진행', process: 'foam',
@@ -230,6 +231,15 @@ function emptyTasks() {
   return out;
 }
 
+// KPI별 평균 계산 — kpi.excludeZeroFromAvg=true면 0도 제외 (미측정/입력 실수 가능성)
+function avgKpiValues(kpi, values) {
+  const exZero = !!(kpi && kpi.excludeZeroFromAvg);
+  const xs = (values || []).filter(v =>
+    v !== null && v !== undefined && v !== '' && !isNaN(v) && (!exZero || Number(v) !== 0)
+  ).map(Number);
+  return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+}
+
 // tasks → 평탄 KPI (대시보드/종합지표/이력 호환용)
 function tasksToFlatKpis(tasks) {
   const t = tasks || {};
@@ -237,8 +247,13 @@ function tasksToFlatKpis(tasks) {
     const xs = arr.filter(v => v !== null && v !== undefined && v !== '' && !isNaN(v)).map(Number);
     return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
   };
+  // 수율은 0(미측정/입력 실수 가능성)을 제외해서 평균. 자재 전부 0/빈 값이면 null
+  const safeAvgNonZero = (arr) => {
+    const xs = arr.filter(v => v !== null && v !== undefined && v !== '' && !isNaN(v) && Number(v) !== 0).map(Number);
+    return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
+  };
   return {
-    spongeYield:      safeAvg([t.foam?.task1?.recotec, t.foam?.task1?.elastic, t.foam?.task1?.terol]),
+    spongeYield:      safeAvgNonZero([t.foam?.task1?.recotec, t.foam?.task1?.elastic, t.foam?.task1?.terol]),
     foamInsourcing:   (t.foam?.task2?.progress      ?? null) === '' ? null : (t.foam?.task2?.progress      ?? null),
     quiltingDefect:   (t.quilting?.task1?.quilting   ?? null) === '' ? null : (t.quilting?.task1?.quilting   ?? null),
     interlockDefect:  (t.quilting?.task1?.interlock  ?? null) === '' ? null : (t.quilting?.task1?.interlock  ?? null),
@@ -1264,7 +1279,7 @@ function DashboardPage({ data }) {
                   : period === 'week'  ? filterProd('week',  selectedWeek)
                   : period === 'month' ? filterProd('month', selectedMonth)
                   : prodSorted;
-    const values = Object.fromEntries(KPI_DEFS.map(k => [k.key, safeAvg(entries.map(e => e[k.key]))]));
+    const values = Object.fromEntries(KPI_DEFS.map(k => [k.key, avgKpiValues(k, entries.map(e => e[k.key]))]));
     const latest = entries[entries.length - 1] || null;
     return { entries, values, count: entries.length, latestTasks: latest?.tasks || emptyTasks() };
   }, [prodSorted, period, selectedDay, selectedWeek, selectedMonth]);
@@ -1275,7 +1290,7 @@ function DashboardPage({ data }) {
                   : period === 'week' ? filterProd('week', prevWeekKey)
                   :                     filterProd('month', prevMonthKey);
     if (!entries.length) return null;
-    return { values: Object.fromEntries(KPI_DEFS.map(k => [k.key, safeAvg(entries.map(e => e[k.key]))])) };
+    return { values: Object.fromEntries(KPI_DEFS.map(k => [k.key, avgKpiValues(k, entries.map(e => e[k.key]))])) };
   }, [prodSorted, period, prevDayKey, prevWeekKey, prevMonthKey]);
 
   // ===== ERP (품질) =====
@@ -1967,11 +1982,7 @@ function aggregateProduction(entries, period) {
     key: g.key,
     label: g.label,
     ymd: g.entries[g.entries.length-1].date,
-    values: Object.fromEntries(KPI_DEFS.map(k => {
-      const vals = g.entries.map(e => e[k.key]).filter(v => v !== null && v !== undefined && v !== '');
-      if (!vals.length) return [k.key, null];
-      return [k.key, avg(vals)];
-    })),
+    values: Object.fromEntries(KPI_DEFS.map(k => [k.key, avgKpiValues(k, g.entries.map(e => e[k.key]))])),
     entries: g.entries,
     count: g.entries.length,
   }));
@@ -3269,10 +3280,7 @@ function aggregateProductionByPeriod(entries, period, opts = {}) {
       key: wk,
       label: `${iso.year} ${isoWeekToMonthLabel(iso.year, iso.week).month}월 ${isoWeekToMonthLabel(iso.year, iso.week).weekOfMonth}주차`,
       ymd: monday,
-      values: Object.fromEntries(KPI_DEFS.map(k => {
-        const vals = filtered.map(e => e[k.key]).filter(v => v !== null && v !== undefined && v !== '');
-        return [k.key, vals.length ? avg(vals) : null];
-      })),
+      values: Object.fromEntries(KPI_DEFS.map(k => [k.key, avgKpiValues(k, filtered.map(e => e[k.key]))])),
       entries: filtered,
       count: filtered.length,
     }];
@@ -3285,10 +3293,7 @@ function aggregateProductionByPeriod(entries, period, opts = {}) {
     return [{
       key: 'all', label,
       ymd: dates[dates.length-1] || '',
-      values: Object.fromEntries(KPI_DEFS.map(k => {
-        const vals = entries.map(e => e[k.key]).filter(v => v !== null && v !== undefined && v !== '');
-        return [k.key, vals.length ? avg(vals) : null];
-      })),
+      values: Object.fromEntries(KPI_DEFS.map(k => [k.key, avgKpiValues(k, entries.map(e => e[k.key]))])),
       entries,
       count: entries.length,
     }];
@@ -3313,15 +3318,49 @@ function ProductionSummaryTab({ data }) {
   const targets = data.targets || DEFAULT_TARGETS;
   const today = todayYMD();
   const yesterday = ymdShift(today, -1);
+  const todayIso = getISOWeek(today);
+  const thisWeekKey  = `${todayIso.year}-W${pad2(todayIso.week)}`;
+  const thisMonthKey = today.slice(0, 7);
   const [period, setPeriod] = useState('day');
-  const [selectedDay, setSelectedDay] = useState(yesterday);
+  const [selectedDay, setSelectedDay]     = useState(yesterday);
+  const [selectedWeek, setSelectedWeek]   = useState(thisWeekKey);
+  const [selectedMonth, setSelectedMonth] = useState(thisMonthKey);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate]     = useState('');
 
-  const dataRange = useMemo(() => {
-    const ds = reports.map(r => r.date).filter(Boolean).sort();
-    return { min: ds[0] || '', max: ds[ds.length - 1] || '' };
-  }, [reports]);
+  // 사용 가능한 주차·월 (대시보드 패턴 동일)
+  const { availableWeeks, availableMonths, dataRange } = useMemo(() => {
+    const weeks = new Map();
+    const months = new Map();
+    const ds = [];
+    reports.forEach(r => {
+      if (!r.date) return;
+      ds.push(r.date);
+      const w = getISOWeek(r.date);
+      const wk = `${w.year}-W${pad2(w.week)}`;
+      if (!weeks.has(wk)) {
+        const ml = isoWeekToMonthLabel(w.year, w.week);
+        weeks.set(wk, `${ml.year} ${ml.month}월 ${ml.weekOfMonth}주차`);
+      }
+      const ym = r.date.slice(0, 7);
+      if (!months.has(ym)) months.set(ym, `${ym.slice(0,4)}년 ${Number(ym.slice(5,7))}월`);
+    });
+    // 이번 주·달 보장
+    const todayY = getISOWeek(today);
+    const todayWk = `${todayY.year}-W${pad2(todayY.week)}`;
+    if (!weeks.has(todayWk)) {
+      const ml = isoWeekToMonthLabel(todayY.year, todayY.week);
+      weeks.set(todayWk, `${ml.year} ${ml.month}월 ${ml.weekOfMonth}주차`);
+    }
+    const todayYm = today.slice(0, 7);
+    if (!months.has(todayYm)) months.set(todayYm, `${todayYm.slice(0,4)}년 ${Number(todayYm.slice(5,7))}월`);
+    const dsSorted = ds.sort();
+    return {
+      availableWeeks:  [...weeks.entries()].sort((a,b) => a[0] < b[0] ? 1 : -1),
+      availableMonths: [...months.entries()].sort((a,b) => a[0] < b[0] ? 1 : -1),
+      dataRange:       { min: dsSorted[0] || '', max: dsSorted[dsSorted.length-1] || '' },
+    };
+  }, [reports, today]);
 
   useEffect(() => {
     if (!startDate && dataRange.min) setStartDate(dataRange.min);
@@ -3330,16 +3369,70 @@ function ProductionSummaryTab({ data }) {
 
   const [effStart, effEnd] = (startDate && endDate && startDate > endDate) ? [endDate, startDate] : [startDate, endDate];
 
-  const grouped = useMemo(() => aggregateProductionByPeriod(reports, period, { start: effStart, end: effEnd, day: selectedDay }), [reports, period, effStart, effEnd, selectedDay]);
+  // 선택된 주·달 단일 시점 집계 + 이전 주·달 비교
+  const prevWeekKey = useMemo(() => {
+    const [yStr, wStr] = selectedWeek.split('-W');
+    const monday = isoWeekToMonday(Number(yStr), Number(wStr));
+    monday.setUTCDate(monday.getUTCDate() - 7);
+    const ymd = `${monday.getUTCFullYear()}-${pad2(monday.getUTCMonth()+1)}-${pad2(monday.getUTCDate())}`;
+    const iso = getISOWeek(ymd);
+    return `${iso.year}-W${pad2(iso.week)}`;
+  }, [selectedWeek]);
+  const prevMonthKey = useMemo(() => {
+    const [y, m] = selectedMonth.split('-').map(Number);
+    return m === 1 ? `${y-1}-12` : `${y}-${pad2(m-1)}`;
+  }, [selectedMonth]);
 
-  // 차트용 데이터 — 일별/전체는 주별 grouping, 그 외는 grouped 그대로
-  const chartGrouped = useMemo(() => {
-    if (period === 'day' || period === 'all') return aggregateProduction(reports, 'week');
-    return grouped;
-  }, [grouped, reports, period]);
+  // 기간별 entry 필터링
+  const filterByPeriod = (mode, key) => {
+    if (mode === 'day')   return reports.filter(e => e.date === key);
+    if (mode === 'week')  return reports.filter(e => {
+      if (!e.date) return false;
+      const w = getISOWeek(e.date);
+      return `${w.year}-W${pad2(w.week)}` === key;
+    });
+    if (mode === 'month') return reports.filter(e => (e.date || '').startsWith(key));
+    return reports;
+  };
 
-  const latestAgg = grouped[grouped.length - 1] || null;
-  const prevAgg   = grouped[grouped.length - 2] || null;
+  // KPI 카드용 단일 시점 집계
+  const currentAgg = useMemo(() => {
+    let entries = [];
+    if (period === 'day')        entries = filterByPeriod('day',   selectedDay);
+    else if (period === 'week')  entries = filterByPeriod('week',  selectedWeek);
+    else if (period === 'month') entries = filterByPeriod('month', selectedMonth);
+    else if (period === 'range') entries = reports.filter(e => {
+      if (!e.date) return false;
+      if (effStart && e.date < effStart) return false;
+      if (effEnd   && e.date > effEnd)   return false;
+      return true;
+    });
+    else entries = reports;
+    if (!entries.length) return null;
+    return {
+      values: Object.fromEntries(KPI_DEFS.map(k => [k.key, avgKpiValues(k, entries.map(e => e[k.key]))])),
+      count: entries.length,
+    };
+  }, [reports, period, selectedDay, selectedWeek, selectedMonth, effStart, effEnd]);
+
+  // 이전 시점 (전 주/달/일) 비교용
+  const previousAgg = useMemo(() => {
+    if (period === 'all' || period === 'range') return null;
+    let entries = [];
+    if (period === 'day')        entries = filterByPeriod('day',   ymdShift(selectedDay, -1));
+    else if (period === 'week')  entries = filterByPeriod('week',  prevWeekKey);
+    else if (period === 'month') entries = filterByPeriod('month', prevMonthKey);
+    if (!entries.length) return null;
+    return {
+      values: Object.fromEntries(KPI_DEFS.map(k => [k.key, avgKpiValues(k, entries.map(e => e[k.key]))])),
+    };
+  }, [reports, period, selectedDay, prevWeekKey, prevMonthKey]);
+
+  // 추세 차트용 시리즈 — 항상 모든 데이터의 주별 grouping
+  const chartGrouped = useMemo(() => aggregateProduction(reports, period === 'month' ? 'month' : 'week'), [reports, period]);
+
+  const latestAgg = currentAgg;
+  const prevAgg   = previousAgg;
 
   const periodLabel = period === 'day' ? '일별'
                     : period === 'week' ? '주별'
@@ -3347,13 +3440,16 @@ function ProductionSummaryTab({ data }) {
                     : period === 'range' ? '기간'
                     : '전체';
 
+  const selectedWeekLabel  = availableWeeks.find(([k]) => k === selectedWeek)?.[1] || selectedWeek;
+  const selectedMonthLabel = availableMonths.find(([k]) => k === selectedMonth)?.[1] || selectedMonth;
+
   const periodMetaLabel = (() => {
     if (period === 'day') {
       const tag = selectedDay === today ? ' · 오늘' : selectedDay === yesterday ? ' · 어제' : '';
       return `${selectedDay}${tag}`;
     }
-    if (period === 'week')  return '주별 추세';
-    if (period === 'month') return '월별 추세';
+    if (period === 'week')  return selectedWeekLabel + (selectedWeek === thisWeekKey ? ' · 이번 주' : '');
+    if (period === 'month') return selectedMonthLabel + (selectedMonth === thisMonthKey ? ' · 이번 달' : '');
     if (period === 'range') return effStart && effEnd ? `${effStart} ~ ${effEnd}` : '기간을 선택하세요';
     return '전체';
   })();
@@ -3362,13 +3458,26 @@ function ProductionSummaryTab({ data }) {
     const fmtMD = (ymd) => `${Number(ymd.slice(5,7))}/${Number(ymd.slice(8,10))}`;
     if (period === 'day') {
       const dow = ['일','월','화','수','목','금','토'][parseYMD(selectedDay).getDay()];
-      return `${dow}요일`;
+      return `${dow}요일${currentAgg ? ` · ${currentAgg.count}건` : ''}`;
+    }
+    if (period === 'week') {
+      const [yStr, wStr] = selectedWeek.split('-W');
+      const monday = isoWeekToMonday(Number(yStr), Number(wStr));
+      const sunday = new Date(monday); sunday.setUTCDate(sunday.getUTCDate() + 6);
+      const s = `${monday.getUTCFullYear()}-${pad2(monday.getUTCMonth()+1)}-${pad2(monday.getUTCDate())}`;
+      const e = `${sunday.getUTCFullYear()}-${pad2(sunday.getUTCMonth()+1)}-${pad2(sunday.getUTCDate())}`;
+      return `${fmtMD(s)} ~ ${fmtMD(e)}${currentAgg ? ` · ${currentAgg.count}건` : ''}`;
+    }
+    if (period === 'month') {
+      const [y, m] = selectedMonth.split('-').map(Number);
+      const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+      return `${m}/1 ~ ${m}/${last}${currentAgg ? ` · ${currentAgg.count}건` : ''}`;
     }
     if (period === 'range' && effStart && effEnd) {
       const days = Math.round((parseYMD(effEnd) - parseYMD(effStart)) / 86400000) + 1;
       return effStart === effEnd ? '1일' : `총 ${days}일`;
     }
-    if ((period === 'week' || period === 'month' || period === 'all') && dataRange.min && dataRange.max) {
+    if (period === 'all' && dataRange.min && dataRange.max) {
       return `데이터 ${fmtMD(dataRange.min)} ~ ${fmtMD(dataRange.max)} · ${reports.length}건`;
     }
     return '';
@@ -3411,6 +3520,18 @@ function ProductionSummaryTab({ data }) {
                 max={today}
                 accent="indigo" />
             )}
+            {period === 'week' && availableWeeks.length > 0 && (
+              <select value={selectedWeek} onChange={e => setSelectedWeek(e.target.value)}
+                className="px-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                {availableWeeks.map(([k, l]) => <option key={k} value={k}>{l}{k === thisWeekKey ? ' (이번 주)' : ''}</option>)}
+              </select>
+            )}
+            {period === 'month' && availableMonths.length > 0 && (
+              <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}
+                className="px-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                {availableMonths.map(([k, l]) => <option key={k} value={k}>{l}{k === thisMonthKey ? ' (이번 달)' : ''}</option>)}
+              </select>
+            )}
             {period === 'range' && (
               <DateRangePicker
                 startDate={startDate} endDate={endDate}
@@ -3421,7 +3542,7 @@ function ProductionSummaryTab({ data }) {
         </div>
       </Card>
 
-      {!grouped.length ? (
+      {!currentAgg ? (
         <EmptyHint iconName="dashboard" msg={`${periodLabel}에 해당하는 데이터가 없습니다.`} />
       ) : (
         <Fragment>
@@ -3435,16 +3556,17 @@ function ProductionSummaryTab({ data }) {
             ))}
           </div>
 
-          {/* KPI 추세 + 목표 달성률 */}
+          {/* KPI × 시점 매트릭스 + 목표 달성률 */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             <Card className="lg:col-span-2" delay={250}>
-              <CardHeader title="KPI 추세" sub="공정 탭 전환 · 발포/퀼팅/스프링" />
-              <div className="p-5">
-                <ProcessTrendChart aggregated={chartGrouped} />
-              </div>
+              <CardHeader title="KPI 매트릭스"
+                sub={period === 'day' ? '최근 7일 · 일별' : period === 'week' ? '최근 4주 · 주별' : period === 'month' ? '최근 6개월 · 월별' : period === 'range' ? '기간 내 일별' : '최근 7일'} />
+              <KpiMatrix reports={reports} targets={targets}
+                period={period} selectedDay={selectedDay} selectedWeek={selectedWeek} selectedMonth={selectedMonth}
+                effStart={effStart} effEnd={effEnd} />
             </Card>
             <Card delay={310}>
-              <CardHeader title="목표 달성률" sub="선택 기간 기준" />
+              <CardHeader title="목표 달성률" sub="선택 시점 기준" />
               <div className="p-5 space-y-3">
                 {KPI_DEFS.map(kpi => (
                   <AchievementRow key={kpi.key} kpi={kpi}
@@ -3456,6 +3578,135 @@ function ProductionSummaryTab({ data }) {
         </Fragment>
       )}
     </Fragment>
+  );
+}
+
+/* ============================================================
+   22-B1b) KPI MATRIX — 최근 N일/주/월 KPI × 시점 매트릭스 표
+   ============================================================ */
+function KpiMatrix({ reports, targets, period, selectedDay, selectedWeek, selectedMonth, effStart, effEnd }) {
+  const { columns, unit } = useMemo(() => {
+    const cols = [];
+    let u = 'day';
+    if (period === 'day' || period === 'all') {
+      u = 'day';
+      for (let i = 6; i >= 0; i--) {
+        cols.push(ymdShift(period === 'day' ? selectedDay : todayYMD(), -i));
+      }
+    } else if (period === 'week') {
+      u = 'week';
+      const [yStr, wStr] = selectedWeek.split('-W');
+      for (let i = 3; i >= 0; i--) {
+        const m = isoWeekToMonday(Number(yStr), Number(wStr));
+        m.setUTCDate(m.getUTCDate() - i * 7);
+        const ymd = `${m.getUTCFullYear()}-${pad2(m.getUTCMonth()+1)}-${pad2(m.getUTCDate())}`;
+        const iso = getISOWeek(ymd);
+        cols.push(`${iso.year}-W${pad2(iso.week)}`);
+      }
+    } else if (period === 'month') {
+      u = 'month';
+      const [y, m] = selectedMonth.split('-').map(Number);
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(Date.UTC(y, m - 1 - i, 1));
+        cols.push(`${d.getUTCFullYear()}-${pad2(d.getUTCMonth()+1)}`);
+      }
+    } else if (period === 'range') {
+      u = 'day';
+      if (effStart && effEnd) {
+        const cur = parseYMD(effStart);
+        const end = parseYMD(effEnd);
+        // 최대 14일까지 (너무 길면 끝쪽만)
+        const all = [];
+        while (cur <= end) {
+          all.push(`${cur.getFullYear()}-${pad2(cur.getMonth()+1)}-${pad2(cur.getDate())}`);
+          cur.setDate(cur.getDate() + 1);
+        }
+        return { columns: all.slice(-14), unit: u };
+      }
+    }
+    return { columns: cols, unit: u };
+  }, [period, selectedDay, selectedWeek, selectedMonth, effStart, effEnd]);
+
+  const getCellValue = (kpi, colKey) => {
+    let entries;
+    if (unit === 'day')        entries = reports.filter(e => e.date === colKey);
+    else if (unit === 'week')  entries = reports.filter(e => {
+      if (!e.date) return false;
+      const w = getISOWeek(e.date);
+      return `${w.year}-W${pad2(w.week)}` === colKey;
+    });
+    else                       entries = reports.filter(e => (e.date || '').startsWith(colKey));
+    if (!entries.length) return null;
+    return avgKpiValues(kpi, entries.map(e => e[kpi.key]));
+  };
+
+  const colLabel = (key) => {
+    if (unit === 'day') {
+      const dow = ['일','월','화','수','목','금','토'][parseYMD(key).getDay()];
+      return { main: `${Number(key.slice(5,7))}/${Number(key.slice(8,10))}`, sub: dow };
+    }
+    if (unit === 'week') {
+      const [yStr, wStr] = key.split('-W');
+      const ml = isoWeekToMonthLabel(Number(yStr), Number(wStr));
+      return { main: `${ml.month}월 ${ml.weekOfMonth}주`, sub: '' };
+    }
+    if (unit === 'month') {
+      return { main: `${Number(key.slice(5,7))}월`, sub: key.slice(0,4) };
+    }
+    return { main: key, sub: '' };
+  };
+
+  const colDowColor = (key) => {
+    if (unit !== 'day') return 'text-slate-600';
+    const dow = parseYMD(key).getDay();
+    return dow === 0 ? 'text-rose-500' : dow === 6 ? 'text-blue-500' : 'text-slate-600';
+  };
+
+  if (!columns.length) {
+    return <div className="p-6 text-center text-xs text-slate-400">표시할 시점이 없습니다.</div>;
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs border-t border-slate-200">
+        <thead>
+          <tr className="bg-slate-50">
+            <th className="px-3 py-2 text-left font-semibold text-slate-600 sticky left-0 bg-slate-50 z-10 whitespace-nowrap">KPI</th>
+            {columns.map(col => {
+              const lb = colLabel(col);
+              return (
+                <th key={col} className={`px-2 py-2 text-center font-semibold whitespace-nowrap ${colDowColor(col)}`}>
+                  <div className="num">{lb.main}</div>
+                  {lb.sub && <div className="text-[9px] font-normal opacity-70">{lb.sub}</div>}
+                </th>
+              );
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {KPI_DEFS.map(kpi => (
+            <tr key={kpi.key} className="border-t border-slate-100 hover:bg-slate-50/30">
+              <td className="px-3 py-2 font-bold whitespace-nowrap sticky left-0 bg-white num text-[11px]" style={{ color: kpi.color }}>
+                {kpi.short}
+                <span className="ml-1 text-[9px] text-slate-400 font-normal">{kpi.unit}</span>
+              </td>
+              {columns.map(col => {
+                const v = getCellValue(kpi, col);
+                if (v === null) return <td key={col} className="px-2 py-2 text-center text-slate-300">—</td>;
+                const status = kpi.statusFn ? kpi.statusFn(v, targets) : getStatus(kpi.key, v, targets);
+                const s = STATUS_STYLE[status] || STATUS_STYLE.none;
+                const showBg = status !== 'none';
+                return (
+                  <td key={col} className={`px-2 py-2 text-center font-bold num ${showBg ? `${s.bg} ${s.text}` : 'text-slate-700'}`}>
+                    {fmtNumber(v, kpi.decimals)}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
