@@ -252,12 +252,17 @@ function tasksToFlatKpis(tasks) {
     const xs = arr.filter(v => v !== null && v !== undefined && v !== '' && !isNaN(v) && Number(v) !== 0).map(Number);
     return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
   };
+  // 양 라인 합 — 둘 다 빈 값이면 null
+  const safeSum = (arr) => {
+    const xs = arr.filter(v => v !== null && v !== undefined && v !== '' && !isNaN(v)).map(Number);
+    return xs.length ? xs.reduce((a, b) => a + b, 0) : null;
+  };
   return {
     spongeYield:      safeAvgNonZero([t.foam?.task1?.recotec, t.foam?.task1?.elastic, t.foam?.task1?.terol]),
     foamInsourcing:   (t.foam?.task2?.progress      ?? null) === '' ? null : (t.foam?.task2?.progress      ?? null),
     quiltingDefect:   (t.quilting?.task1?.quilting   ?? null) === '' ? null : (t.quilting?.task1?.quilting   ?? null),
     interlockDefect:  (t.quilting?.task1?.interlock  ?? null) === '' ? null : (t.quilting?.task1?.interlock  ?? null),
-    springDaily:      safeAvg([t.spring?.task1?.line1, t.spring?.task1?.line2]),
+    springDaily:      safeSum([t.spring?.task1?.line1, t.spring?.task1?.line2]),
     springChangeover: safeAvg([t.spring?.task2?.line1, t.spring?.task2?.line2]),
   };
 }
@@ -1494,11 +1499,23 @@ function DashboardPage({ data }) {
                 {visibleProcs.map(proc => {
                   const task = TASK_DEFS[proc.key][taskIdx];
                   if (!task) return <div key={proc.key} />;
+                  // progressThis가 그 entry에 없으면 그 task의 가장 최근 progressThis로 fallback
+                  const cellValue = (prodCurrent.latestTasks[proc.key] || {})[task.key] || {};
+                  let fallbackProgress = '';
+                  if (!cellValue.progressThis) {
+                    for (let i = prodSorted.length - 1; i >= 0; i--) {
+                      const v = prodSorted[i].tasks?.[proc.key]?.[task.key]?.progressThis;
+                      if (v && v.trim()) { fallbackProgress = v; break; }
+                    }
+                  }
+                  const value = fallbackProgress
+                    ? { ...cellValue, progressThis: fallbackProgress }
+                    : cellValue;
                   return (
                     <TaskViewCard key={`${proc.key}-${task.key}`}
                       num={taskIdx + 1}
                       task={task}
-                      value={(prodCurrent.latestTasks[proc.key] || {})[task.key] || {}}
+                      value={value}
                       accent={proc.color}
                       targets={targets}
                       procKey={proc.key} />
