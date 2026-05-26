@@ -231,6 +231,11 @@ function emptyTasks() {
   return out;
 }
 
+// 저장된 entries의 평탄 KPI를 tasks에서 실시간 재계산 — 공식 변경 시 기존 데이터도 자동 반영
+function refreshFlatKpis(entries) {
+  return (entries || []).map(e => ({ ...e, ...tasksToFlatKpis(e.tasks || {}) }));
+}
+
 // KPI별 평균 계산 — kpi.excludeZeroFromAvg=true면 0도 제외 (미측정/입력 실수 가능성)
 function avgKpiValues(kpi, values) {
   const exZero = !!(kpi && kpi.excludeZeroFromAvg);
@@ -1214,7 +1219,7 @@ function DashboardPage({ data }) {
   const [selectedMonth, setSelectedMonth] = useState(thisMonthKey);
 
   // ===== Production / ERP =====
-  const prodSorted = useMemo(() => [...(data.production||[])].sort((a,b)=> a.date < b.date ? -1 : 1), [data.production]);
+  const prodSorted = useMemo(() => refreshFlatKpis([...(data.production||[])]).sort((a,b)=> a.date < b.date ? -1 : 1), [data.production]);
   const erpSorted  = useMemo(() => [...(data.erpReports||[])].sort((a,b)=> a.reportDate < b.reportDate ? -1 : 1), [data.erpReports]);
 
   // 사용 가능한 일/주/월 옵션 (production + erpReports 둘 다 기준, 최신순)
@@ -3331,7 +3336,7 @@ function aggregateProductionByPeriod(entries, period, opts = {}) {
 }
 
 function ProductionSummaryTab({ data }) {
-  const reports = data.production || [];
+  const reports = useMemo(() => refreshFlatKpis(data.production || []), [data.production]);
   const targets = data.targets || DEFAULT_TARGETS;
   const today = todayYMD();
   const yesterday = ymdShift(today, -1);
@@ -5269,7 +5274,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
    ============================================================ */
 function ProductionHistoryTab({ data, onSave, onSaveTrash }) {
   const toast = useToast();
-  const reports = data.production || [];
+  const reports = useMemo(() => refreshFlatKpis(data.production || []), [data.production]);
   const trash   = data.productionTrash || [];
 
   const sorted = useMemo(() => {
