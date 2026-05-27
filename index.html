@@ -30,7 +30,7 @@
   };
   firebase.initializeApp(firebaseConfig);
   const _db = firebase.firestore();
-  const _isDev = location.protocol === 'file:';
+  const _isDev = location.protocol === 'file:' || ['localhost', '127.0.0.1'].includes(location.hostname);
   const _DOC = _db.collection("kpidb_v2").doc(_isDev ? "dev" : "main");
 
   window.__fb = {
@@ -432,7 +432,7 @@ async function parseErpFile(file) {
       date,
       code:       idx.code       !== undefined ? String(r[idx.code] || '').trim() : '',
       product:    productName,
-      spec:       idx.spec       !== undefined ? String(r[idx.spec] || '').trim().replace(/ /g, '') : '',
+      spec:       idx.spec       !== undefined ? String(r[idx.spec] || '').trim().replace(/\x00/g, '') : '',
       qty:        Number(r[idx.qty]) || 0,
       unitPrice:  idx.unitPrice  !== undefined ? Number(r[idx.unitPrice]) || 0 : 0,
       amount:     Number(r[idx.amount]) || 0,
