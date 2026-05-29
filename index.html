@@ -562,6 +562,14 @@ function sum(arr) {
   return arr.filter(x => x !== null && x !== undefined && !isNaN(x))
             .map(Number).reduce((a,b) => a+b, 0);
 }
+// "8:40-10:25" 또는 "8:40~10:25" 형태 → 분 단위 정수. 역순·파싱 실패는 0
+function parseTimeRangeMinutes(s) {
+  if (!s) return 0;
+  const m = String(s).match(/(\d{1,2}):(\d{2})\s*[-~]\s*(\d{1,2}):(\d{2})/);
+  if (!m) return 0;
+  const diff = (Number(m[3]) * 60 + Number(m[4])) - (Number(m[1]) * 60 + Number(m[2]));
+  return diff > 0 ? diff : 0;
+}
 
 function getStatus(kpiKey, value, targets) {
   if (value === null || value === undefined || value === '' || isNaN(value)) return 'none';
@@ -752,6 +760,7 @@ function App() {
     geminiPassHash:  LS.get('geminiPassHash', '') || localStorage.getItem('kpi_gemini_pass_hash') || '',
   });
   const [lastSync, setLastSync] = useState(null);
+  const [syncing, setSyncing] = useState(true);
 
   // 초기 동기화 + 실시간 리스너
   useEffect(() => {
@@ -775,6 +784,7 @@ function App() {
         geminiPassHash:  fb.geminiPassHash  ?? prev.geminiPassHash,
       }));
       setLastSync(new Date());
+      setSyncing(false);
       if (window.__fb && window.__fb.listen) {
         unsub = window.__fb.listen((d) => {
           const out = {};
@@ -818,7 +828,7 @@ function App() {
       setData(prev => {
         const cutoff = Date.now() - TRASH_RETENTION_MS;
         const clean = (arr) => (arr || []).filter(t => {
-          const ts = t.deletedAt ? new Date(t.deletedAt).getTime() : Date.now();
+          const ts = t.deletedAt ? new Date(t.deletedAt).getTime() : 0; // deletedAt 없는 레거시 항목은 즉시 만료
           return ts > cutoff;
         });
         const erpCleaned  = clean(prev.erpTrash);
@@ -839,12 +849,18 @@ function App() {
   const isHome = route === '/' || route === '';
 
   return (
+    <ConfirmProvider>
     <ToastProvider>
+      {syncing && (
+        <div className="fixed top-0 left-0 right-0 h-0.5 z-[99999] bg-slate-200 overflow-hidden">
+          <div className="h-full bg-indigo-500 shimmer" style={{width:'100%'}}></div>
+        </div>
+      )}
       {isHome ? (
         <HomePage navigate={navigate} data={data} />
       ) : (
         <div className="min-h-screen flex flex-col">
-          <TopBar route={route} navigate={navigate} lastSync={lastSync} />
+          <TopBar route={route} navigate={navigate} lastSync={lastSync} syncing={syncing} />
           <main className="flex-1 px-6 lg:px-10 py-6 max-w-[1600px] w-full mx-auto">
             {route === '/dashboard'           && <DashboardPage     data={data} />}
             {route === '/production'          && <ProductionPage    data={data} onSave={saveProduction} onSaveTrash={saveProductionTrash} onSaveJournal={saveWeeklyJournal} onSaveCatalog={saveProductCatalog} onSaveBunghalLog={saveBunghalLog} onSaveBunghalCorrections={saveBunghalCorrections} onSaveGeminiKey={saveGeminiApiKey} onSaveGeminiPassHash={saveGeminiPassHash} />}
@@ -860,6 +876,7 @@ function App() {
         </div>
       )}
     </ToastProvider>
+    </ConfirmProvider>
   );
 }
 
@@ -874,7 +891,7 @@ const PAGE_META = {
   '/quality/settings':    { title: '품질보증팀 목표 설정', sub: '월 누적 부적합·손실 상한 기준',     tag: 'QUALITY · SETTINGS',    accent: 'rose' },
 };
 
-function TopBar({ route, navigate, lastSync }) {
+function TopBar({ route, navigate, lastSync, syncing }) {
   const meta = PAGE_META[route] || { title: '', sub: '', tag: '', accent: 'slate' };
   const [now, setNow] = useState(new Date());
   useEffect(() => {
@@ -941,10 +958,16 @@ function TopBar({ route, navigate, lastSync }) {
             <div className="text-right text-slate-400">
               <div className="flex items-center gap-1.5 justify-end">
                 <span className="relative inline-flex w-1.5 h-1.5">
-                  <span className="absolute inset-0 rounded-full bg-emerald-400 animate-pulse-ring"></span>
-                  <span className="relative w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                  {syncing ? (
+                    <span className="relative w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                  ) : (
+                    <Fragment>
+                      <span className="absolute inset-0 rounded-full bg-emerald-400 animate-pulse-ring"></span>
+                      <span className="relative w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                    </Fragment>
+                  )}
                 </span>
-                <span>동기화</span>
+                <span>{syncing ? '동기화 중…' : '동기화'}</span>
               </div>
               <div className="num">{syncTime}</div>
             </div>
@@ -1198,6 +1221,87 @@ function PillButton({ active, onClick, children, color = 'slate' }) {
     </button>
   );
 }
+
+/* ============================================================
+   11-B) AlertModal — 간단한 경고 팝업
+   ============================================================ */
+function AlertModal({ title, message, detail, onClose }) {
+  useEffect(() => {
+    const h = (e) => { if (e.key === 'Escape' || e.key === 'Enter') onClose(); };
+    document.addEventListener('keydown', h);
+    return () => document.removeEventListener('keydown', h);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 animate-fade-in"
+         style={{ background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(4px)' }}
+         onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 animate-pop"
+           onClick={e => e.stopPropagation()}>
+        <div className="flex items-start gap-4 mb-5">
+          <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center shrink-0 text-xl">⚠️</div>
+          <div>
+            <h3 className="font-bold text-slate-800 text-base leading-tight">{title}</h3>
+            {message && <p className="text-sm text-slate-500 mt-1.5 leading-relaxed">{message}</p>}
+            {detail && (
+              <div className="mt-2 px-3 py-2 bg-slate-50 rounded-lg border border-slate-200 text-xs font-mono text-slate-600 break-all">
+                {detail}
+              </div>
+            )}
+          </div>
+        </div>
+        <button onClick={onClose} autoFocus
+          className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-sm font-bold transition-colors">
+          확인
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   11-C) ConfirmProvider — 확인/취소 팝업 (브라우저 confirm 대체)
+   ============================================================ */
+const ConfirmCtx = React.createContext(() => Promise.resolve(false));
+function ConfirmProvider({ children }) {
+  const [pending, setPending] = useState(null); // { message, resolve }
+  const confirm = useCallback((message) => new Promise(resolve => setPending({ message, resolve })), []);
+  const close = (result) => { if (pending) { pending.resolve(result); setPending(null); } };
+  useEffect(() => {
+    if (!pending) return;
+    const h = (e) => { if (e.key === 'Escape') close(false); };
+    document.addEventListener('keydown', h);
+    return () => document.removeEventListener('keydown', h);
+  }, [pending]);
+  return (
+    <ConfirmCtx.Provider value={confirm}>
+      {children}
+      {pending && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 animate-fade-in"
+             style={{ background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(4px)' }}
+             onClick={() => close(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 animate-pop"
+               onClick={e => e.stopPropagation()}>
+            <div className="flex items-start gap-4 mb-5">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center shrink-0 text-xl">🗑️</div>
+              <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap pt-1">{pending.message}</p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => close(false)} autoFocus
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold transition-colors">
+                취소
+              </button>
+              <button onClick={() => close(true)}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold transition-colors">
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </ConfirmCtx.Provider>
+  );
+}
+const useConfirm = () => React.useContext(ConfirmCtx);
 
 /* ============================================================
    12) DASHBOARD
@@ -3743,6 +3847,27 @@ function makeEmptyProductionRecord() {
   return { _id: crypto.randomUUID(), product: '', size: '', position: '', qty: '', time: '' };
 }
 
+// 인식된 작업자명을 catalog.owners 목록 중 가장 가까운 이름으로 교정 (편집거리 ≤ 2)
+function snapToKnownOwner(raw, owners) {
+  if (!raw || !owners || !owners.length) return raw;
+  const s = raw.trim();
+  if (!s) return s;
+  if (owners.includes(s)) return s;
+  const ci = owners.find(o => o.toLowerCase() === s.toLowerCase());
+  if (ci) return ci;
+  function editDist(a, b) {
+    const m = a.length, n = b.length;
+    const dp = Array.from({length: m+1}, (_, i) => Array.from({length: n+1}, (_, j) => i===0?j:j===0?i:0));
+    for (let i = 1; i <= m; i++)
+      for (let j = 1; j <= n; j++)
+        dp[i][j] = a[i-1]===b[j-1] ? dp[i-1][j-1] : 1+Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+    return dp[m][n];
+  }
+  let best = raw, bestDist = Infinity;
+  owners.forEach(o => { const d = editDist(s, o); if (d < bestDist) { bestDist = d; best = o; } });
+  return bestDist <= 2 ? best : raw;
+}
+
 // 비밀번호 해시 (Web Crypto API의 SHA-256)
 async function sha256Hex(text) {
   const buf = new TextEncoder().encode(text);
@@ -3911,6 +4036,25 @@ function BunghalTrendChart({ trend }) {
           y: { beginAtZero: true, grid: { color: '#F1F5F9' }, ticks: { color: '#64748B', font: { size: 10 }, precision: 0 } },
         },
       },
+      plugins: [{
+        id: 'bunghalDatalabels',
+        afterDatasetsDraw(chart) {
+          const { ctx, scales: { x, y } } = chart;
+          const dataset = chart.data.datasets[0];
+          ctx.save();
+          ctx.font = 'bold 10px sans-serif';
+          ctx.fillStyle = '#7C3AED';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'bottom';
+          dataset.data.forEach((val, i) => {
+            if (val == null) return;
+            const xPos = x.getPixelForIndex(i);
+            const yPos = y.getPixelForValue(val);
+            ctx.fillText(val, xPos, yPos - 4);
+          });
+          ctx.restore();
+        },
+      }],
     });
     return () => { if (chartRef.current) chartRef.current.destroy(); };
   }, [trend]);
@@ -3958,6 +4102,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
   const isRecord = mode === 'record';
   const isAnalysis = mode === 'analysis';
   const toast = useToast();
+  const dialog = useConfirm();
   const erpReports = data.erpReports || [];
   const bunghalLog = data.bunghalLog || [];
   const catalog    = data.productCatalog || DEFAULT_PRODUCT_CATALOG;
@@ -3966,11 +4111,14 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
 
   const [period, setPeriod] = useState('week');
   const [selectedDay, setSelectedDay] = useState(yesterday);
-  const [selectedWeek, setSelectedWeek] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState('');
+  const [selectedWeek, setSelectedWeek] = useState(() => { const iso = getISOWeek(today); return `${iso.year}-W${pad2(iso.week)}`; });
+  const [selectedMonth, setSelectedMonth] = useState(() => today.slice(0, 7));
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [typeFilter, setTypeFilter] = useState('both'); // 'quilting' | 'inter' | 'both'
+  const [showMoreCause, setShowMoreCause] = useState(false);
+  const [showMoreDefect, setShowMoreDefect] = useState(false);
+  const [showMoreWorker, setShowMoreWorker] = useState(false);
 
   // 작업일지 입력 영역 상태
   const [inputOpen, setInputOpen] = useState(true);
@@ -3978,6 +4126,8 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
   const [ownerEditText, setOwnerEditText] = useState('');
   const [inputDate, setInputDate] = useState(yesterday);
   const [inputOwner, setInputOwner] = useState(() => localStorage.getItem('kpi_owner_bunghal') || '');
+  const [editingEntryId, setEditingEntryId] = useState(null); // 편집 중인 항목 ID (owner 변경 시 신규 생성 방지)
+  const [ownerAlert, setOwnerAlert] = useState(null); // 미등록 작업자 팝업 { recognized, reason }
   const [inputRecords, setInputRecords] = useState([]);
   const [productionRecords, setProductionRecords] = useState([]);  // 생산량 (상단 표)
   const [originalRecords, setOriginalRecords] = useState([]); // 인식 직후 원본 (수정 비교용)
@@ -4047,8 +4197,8 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
     }
   };
 
-  const handleResetPassword = () => {
-    if (!confirm('비밀번호와 API 키를 모두 초기화할까요? (Firestore의 공유 비밀번호·키도 삭제되어 모든 PC에 적용됩니다)')) return;
+  const handleResetPassword = async () => {
+    if (!await dialog('비밀번호와 API 키를 모두 초기화할까요?\nFirestore의 공유 비밀번호·키도 삭제되어 모든 PC에 적용됩니다.')) return;
     localStorage.removeItem('kpi_gemini_pass_hash');
     localStorage.removeItem('kpi_gemini_key');
     onSaveGeminiPassHash && onSaveGeminiPassHash('');
@@ -4105,14 +4255,18 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
         }),
       });
       if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`Gemini API ${res.status}: ${errText.slice(0, 200)}`);
+        const hint = res.status === 400 ? 'API 키가 잘못됐거나 이미지 형식이 지원되지 않습니다.'
+                   : res.status === 403 ? 'API 키 권한이 없습니다. 키를 다시 확인해주세요.'
+                   : res.status === 429 ? '요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.'
+                   : res.status >= 500 ? 'Gemini 서버 오류입니다. 잠시 후 다시 시도해주세요.'
+                   : `오류 코드 ${res.status}`;
+        throw new Error(hint);
       }
       const json = await res.json();
       const text = json.candidates?.[0]?.content?.parts?.[0]?.text || '';
       let parsed;
       try { parsed = JSON.parse(text); }
-      catch (e) { throw new Error('Gemini 응답 JSON 파싱 실패: ' + text.slice(0, 200)); }
+      catch (e) { throw new Error('API 응답을 파싱할 수 없습니다. 사진이 너무 흐리거나 글씨가 잘 안 보이면 다시 촬영해주세요.'); }
       // 호환: 구버전 응답(배열만)도 지원
       const defectsArr = Array.isArray(parsed) ? parsed : (parsed.defects || []);
       const prodArr    = Array.isArray(parsed) ? []     : (parsed.production || []);
@@ -4150,19 +4304,25 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
       // meta 처리 — 일자·작업자 인식
       const meta = (!Array.isArray(parsed) && parsed.meta) ? parsed.meta : {};
       const recoDate = String(meta.date || '').trim();
-      const recoOwner = String(meta.owner || '').trim();
+      const rawOwner = String(meta.owner || '').trim();
+      const recoOwner = snapToKnownOwner(rawOwner, catalog.owners);
+      const ownerInCatalog = (catalog.owners || []).includes(recoOwner);
       const dateValid = /^\d{4}-\d{2}-\d{2}$/.test(recoDate);
       const dateDiff = dateValid && recoDate !== inputDate;
-      const ownerDiff = recoOwner && recoOwner !== inputOwner;
+      const ownerDiff = ownerInCatalog && recoOwner && recoOwner !== inputOwner;
 
       if (dateDiff || ownerDiff) {
-        const msg = `인식: ${dateValid ? recoDate : '?'} · ${recoOwner || '?'}\n헤더: ${inputDate} · ${inputOwner || '—'}\n\n헤더를 갱신할까요?`;
-        if (confirm(msg)) {
-          skipReloadRef.current = true; // useEffect의 자동 reset 한 번 건너뛰기 — 인식 결과 보존
+        const msg = `인식: ${dateValid ? recoDate : '?'} · ${ownerInCatalog ? recoOwner : '?'}\n헤더: ${inputDate} · ${inputOwner || '—'}\n\n헤더를 갱신할까요?`;
+        if (await dialog(msg)) {
+          skipReloadRef.current = true;
           if (dateValid) setInputDate(recoDate);
-          if (recoOwner) handleSaveOwner(recoOwner);
-          toast(`헤더 갱신 → ${dateValid ? recoDate : inputDate} · ${recoOwner || inputOwner}`, 'success');
+          if (ownerInCatalog && recoOwner) handleSaveOwner(recoOwner);
+          toast(`헤더 갱신 → ${dateValid ? recoDate : inputDate} · ${ownerInCatalog ? recoOwner : inputOwner}`, 'success');
         }
+      }
+      // 인식된 작업자가 목록에 없으면 팝업 (저장 막힘)
+      if (rawOwner && !ownerInCatalog) {
+        setOwnerAlert({ recognized: rawOwner, reason: 'recognition' });
       }
       toast(`생산 ${prodRecs.length}건 · 부적합 ${defectRecords.length}건 인식 완료 — 검토 후 저장`, 'success');
     } catch (e) {
@@ -4175,15 +4335,13 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
 
   // 일자·작업자 변경 시 — 그 일자+작업자 entry 있으면 로드 (date+owner unique key)
   useEffect(() => {
-    // 인식 직후 헤더 자동 갱신 시 한 번만 건너뛰기 — 인식 결과 보존
-    if (skipReloadRef.current) {
-      skipReloadRef.current = false;
-      return;
-    }
+    if (skipReloadRef.current) { skipReloadRef.current = false; return; }
+    // 편집 모드(editingEntryId 설정됨): 작업자 변경 시 records 초기화 방지
+    if (editingEntryId) return;
     const ex = bunghalLog.find(e => e.date === inputDate && (e.owner || '') === (inputOwner || '').trim());
     setInputRecords(ex && ex.records ? ex.records : [makeEmptyBunghalRecord()]);
     setProductionRecords(ex && ex.productionRecords ? ex.productionRecords : [makeEmptyProductionRecord()]);
-  }, [inputDate, inputOwner, bunghalLog]);
+  }, [inputDate, inputOwner, bunghalLog]); // editingEntryId는 의도적으로 deps 제외
 
   const handleSaveOwner = (name) => {
     setInputOwner(name);
@@ -4215,7 +4373,10 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
   const removeProdRecord = (idx) => setProductionRecords(rs => rs.filter((_, i) => i !== idx));
 
   const saveBunghalEntry = () => {
-    if (!inputOwner.trim()) { toast('작업자명을 입력해주세요', 'warn'); return; }
+    if (!inputOwner.trim() || !(catalog.owners || []).includes(inputOwner.trim())) {
+      setOwnerAlert({ recognized: inputOwner.trim() || null, reason: 'save' });
+      return;
+    }
     const valid = inputRecords.filter(r =>
       (r.product || '').trim() || (Number(r.qty) || 0) > 0
     );
@@ -4223,7 +4384,10 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
       (r.product || '').trim() || (Number(r.qty) || 0) > 0
     );
     if (!valid.length && !validProd.length) { toast('입력된 record가 없습니다', 'warn'); return; }
-    const existing = bunghalLog.find(e => e.date === inputDate && (e.owner || '') === (inputOwner || '').trim());
+    // 편집 모드면 ID로 조회, 아니면 date+owner 조합으로 조회
+    const existing = editingEntryId
+      ? bunghalLog.find(e => e.id === editingEntryId)
+      : bunghalLog.find(e => e.date === inputDate && (e.owner || '') === (inputOwner || '').trim());
     const entry = {
       id: existing?.id || crypto.randomUUID(),
       date: inputDate,
@@ -4236,6 +4400,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
     const next = existing
       ? bunghalLog.map(e => e.id === existing.id ? entry : e)
       : [...bunghalLog, entry];
+    setEditingEntryId(null);
     onSaveLog(next);
 
     // 자가 학습 — 인식 직후 originalRecords와 현재 inputRecords의 차이를 누적
@@ -4319,11 +4484,14 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
     onSave(nextProd);
   };
 
-  const deleteBunghalEntry = () => {
-    const existing = bunghalLog.find(e => e.date === inputDate && (e.owner || '') === (inputOwner || '').trim());
+  const deleteBunghalEntry = async () => {
+    const existing = editingEntryId
+      ? bunghalLog.find(e => e.id === editingEntryId)
+      : bunghalLog.find(e => e.date === inputDate && (e.owner || '') === (inputOwner || '').trim());
     if (!existing) { toast('이 일자에 등록된 작업일지가 없습니다', 'warn'); return; }
-    if (!confirm(`${inputDate} 작업일지를 삭제할까요? (record ${existing.records?.length || 0}건)`)) return;
+    if (!await dialog(`${inputDate} 작업일지를 삭제할까요?\n부적합 ${existing.records?.length || 0}건이 함께 삭제됩니다.`)) return;
     const next = bunghalLog.filter(e => e.id !== existing.id);
+    setEditingEntryId(null);
     onSaveLog(next);
     setInputRecords([makeEmptyBunghalRecord()]);
     setProductionRecords([makeEmptyProductionRecord()]);
@@ -4332,10 +4500,10 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
     toast(`${inputDate} 작업일지 삭제 완료`, 'info');
   };
 
-  const deleteBunghalEntryById = (id) => {
+  const deleteBunghalEntryById = async (id) => {
     const target = bunghalLog.find(e => e.id === id);
     if (!target) return;
-    if (!confirm(`${target.date} · ${target.owner || '—'} 작업일지를 삭제할까요? (record ${target.records?.length || 0}건)`)) return;
+    if (!await dialog(`${target.date} · ${target.owner || '—'} 작업일지를 삭제할까요?\n부적합 ${target.records?.length || 0}건이 함께 삭제됩니다.`)) return;
     const next = bunghalLog.filter(e => e.id !== id);
     onSaveLog(next);
     syncDailyKpiFromBunghal(next, target.date);
@@ -4343,14 +4511,19 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
   };
 
   const editBunghalEntry = (entry) => {
+    setEditingEntryId(entry.id || null);
     setInputDate(entry.date);
     setInputOwner(entry.owner || '');
+    // records를 직접 로드 (useEffect가 editingEntryId 때문에 skip하므로)
+    setInputRecords(entry.records?.length ? entry.records : [makeEmptyBunghalRecord()]);
+    setProductionRecords(entry.productionRecords?.length ? entry.productionRecords : [makeEmptyProductionRecord()]);
     setInputOpen(true);
-    // 스크롤 위로 (편집 영역으로)
     setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 50);
   };
 
-  const currentEntry = bunghalLog.find(e => e.date === inputDate && (e.owner || '') === (inputOwner || '').trim());
+  const currentEntry = editingEntryId
+    ? bunghalLog.find(e => e.id === editingEntryId)
+    : bunghalLog.find(e => e.date === inputDate && (e.owner || '') === (inputOwner || '').trim());
 
   // 1) bunghalLog → 봉탈 records 추출 (date 필드 포함)
   const bunghalRecords = useMemo(() => {
@@ -4383,22 +4556,26 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
   }, [bunghalLog]);
 
   // 2) 사용 가능한 일·주·월 + dataRange
+  // bunghalRecords + productionRecordsAll 양쪽 날짜를 합산해야
+  // 봉탈 없이 생산량만 입력된 날도 기간 드롭다운에 포함됨
   const { availableDays, availableWeeks, availableMonths, dataRange } = useMemo(() => {
     const days = new Set();
     const weeks = new Map();
     const months = new Map();
-    bunghalRecords.forEach(r => {
-      if (!r.date) return;
-      days.add(r.date);
-      const w = getISOWeek(r.date);
+    const addDate = (date) => {
+      if (!date) return;
+      days.add(date);
+      const w = getISOWeek(date);
       const wk = `${w.year}-W${pad2(w.week)}`;
       if (!weeks.has(wk)) {
         const ml = isoWeekToMonthLabel(w.year, w.week);
         weeks.set(wk, `${ml.year} ${ml.month}월 ${ml.weekOfMonth}주차`);
       }
-      const ym = r.date.slice(0, 7);
+      const ym = date.slice(0, 7);
       if (!months.has(ym)) months.set(ym, `${ym.slice(0,4)}년 ${Number(ym.slice(5,7))}월`);
-    });
+    };
+    bunghalRecords.forEach(r => addDate(r.date));
+    productionRecordsAll.forEach(r => addDate(r.date));
     const ds = [...days].sort();
     return {
       availableDays:   ds.slice().reverse(),
@@ -4406,7 +4583,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
       availableMonths: [...months.entries()].sort((a,b) => a[0] < b[0] ? 1 : -1),
       dataRange:       { min: ds[0] || '', max: ds[ds.length-1] || '' },
     };
-  }, [bunghalRecords]);
+  }, [bunghalRecords, productionRecordsAll]);
 
   // 기본 선택 — 데이터의 가장 최근
   useEffect(() => {
@@ -4447,19 +4624,21 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
 
   // 4) 품목 × 일자 cross-tab
   const crossTab = useMemo(() => {
-    const products = new Map();          // product → Map<date, qty>
+    const products = new Map();          // key → { name, position, byDate }
     const dateSet = new Set();
     filtered.forEach(r => {
-      const p = (r.product || '미지정').trim() || '미지정';
+      const n = (r.product || '미지정').trim() || '미지정';
+      const pos = (r.position || '').trim();
+      const key = pos ? `${n}||${pos}` : n;
       const d = r.date || '—';
       dateSet.add(d);
-      if (!products.has(p)) products.set(p, new Map());
-      const m = products.get(p);
-      m.set(d, (m.get(d) || 0) + (Number(r.qty) || 0));
+      if (!products.has(key)) products.set(key, { name: n, position: pos, byDate: new Map() });
+      const entry = products.get(key);
+      entry.byDate.set(d, (entry.byDate.get(d) || 0) + (Number(r.qty) || 0));
     });
-    const productList = [...products.entries()].map(([name, m]) => {
-      const total = [...m.values()].reduce((a, b) => a + b, 0);
-      return { name, byDate: m, total };
+    const productList = [...products.values()].map(({ name, position, byDate }) => {
+      const total = [...byDate.values()].reduce((a, b) => a + b, 0);
+      return { name, position, byDate, total };
     }).sort((a, b) => b.total - a.total);
     const dateList = [...dateSet].sort();
     return { productList, dateList };
@@ -4539,23 +4718,47 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
   const defectRateByProduct = useMemo(() => {
     const prodMap = new Map();
     filteredProduction.forEach(r => {
-      const p = (r.product || '').trim() || '미지정';
-      prodMap.set(p, (prodMap.get(p) || 0) + (Number(r.qty) || 0));
+      const n = (r.product || '').trim() || '미지정';
+      const pos = (r.position || '').trim();
+      const key = pos ? `${n}||${pos}` : n;
+      const prev = prodMap.get(key) || { name: n, position: pos, qty: 0 };
+      prodMap.set(key, { name: n, position: pos, qty: prev.qty + (Number(r.qty) || 0) });
     });
     const defectMap = new Map();
     filtered.forEach(r => {
-      const p = (r.product || '').trim() || '미지정';
-      defectMap.set(p, (defectMap.get(p) || 0) + (Number(r.qty) || 0));
+      const n = (r.product || '').trim() || '미지정';
+      const pos = (r.position || '').trim();
+      const key = pos ? `${n}||${pos}` : n;
+      defectMap.set(key, (defectMap.get(key) || 0) + (Number(r.qty) || 0));
     });
     // 생산량이 있는 품목만 (불량률 계산 가능)
     const result = [];
-    prodMap.forEach((production, name) => {
-      const defect = defectMap.get(name) || 0;
+    prodMap.forEach(({ name, position, qty: production }, key) => {
+      const defect = defectMap.get(key) || 0;
       const rate = production > 0 ? (defect / production * 100) : 0;
-      result.push({ name, production, defect, rate });
+      result.push({ name, position, production, defect, rate });
     });
     return result.sort((a, b) => b.rate - a.rate);
   }, [filtered, filteredProduction]);
+
+  // 작업자별 일 평균 생산량
+  const workerStats = useMemo(() => {
+    const map = new Map(); // owner → { totalQty, days: Set }
+    filteredProduction.forEach(r => {
+      const owner = (r.owner || '').trim() || '미지정';
+      const qty   = Number(r.qty) || 0;
+      if (!map.has(owner)) map.set(owner, { totalQty: 0, days: new Set() });
+      const s = map.get(owner);
+      s.totalQty += qty;
+      if (r.date) s.days.add(r.date);
+    });
+    const result = [];
+    map.forEach(({ totalQty, days }, owner) => {
+      const dayCount = days.size || 1;
+      result.push({ owner, totalQty, dayCount, avgPerDay: Math.round(totalQty / dayCount) });
+    });
+    return result.sort((a, b) => b.avgPerDay - a.avgPerDay);
+  }, [filteredProduction]);
 
   // KPI 요약값
   const dayCount = crossTab.dateList.length;
@@ -4580,6 +4783,20 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
 
   return (
     <Fragment>
+      {/* 미등록 작업자 팝업 */}
+      {ownerAlert && (
+        <AlertModal
+          title="작업자를 선택해주세요"
+          message={
+            ownerAlert.reason === 'recognition'
+              ? '인식된 작업자명이 목록에 없습니다. 드롭다운에서 올바른 작업자를 선택한 후 저장해주세요.'
+              : '등록된 작업자를 선택해야 저장할 수 있습니다.'
+          }
+          detail={ownerAlert.recognized ? `인식된 이름: "${ownerAlert.recognized}"` : null}
+          onClose={() => setOwnerAlert(null)}
+        />
+      )}
+
       {/* 사진 확대 라이트박스 — Portal */}
       {photoZoomOpen && photoDataUrl && ReactDOM.createPortal(
         <div onClick={() => setPhotoZoomOpen(false)}
@@ -4685,20 +4902,23 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
             <DateRangePicker mode="single" startDate={inputDate}
               onChange={(d) => d && setInputDate(d)} max={today} accent="indigo" />
           </div>
-          <div className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 ${inputOwner.trim() ? 'bg-slate-50 border border-slate-200' : 'bg-rose-50/40 border border-dashed border-rose-300'}`}>
+          {(() => {
+            const ownerOk = inputOwner.trim() && (catalog.owners || []).includes(inputOwner.trim());
+            const ownerBorderCls = ownerOk ? 'bg-slate-50 border border-slate-200' : 'bg-rose-50/40 border border-dashed border-rose-300';
+            return (
+          <div className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 ${ownerBorderCls}`}>
             <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">작업자</span>
-            <select value={inputOwner} onChange={e => handleSaveOwner(e.target.value)}
+            <select value={ownerOk ? inputOwner : ''} onChange={e => handleSaveOwner(e.target.value)}
               className="px-1.5 py-0.5 text-xs bg-transparent focus:outline-none num min-w-[60px]">
               <option value="">선택</option>
               {(catalog.owners || []).map(o => <option key={o} value={o}>{o}</option>)}
-              {inputOwner && !(catalog.owners || []).includes(inputOwner) && (
-                <option value={inputOwner}>{inputOwner}</option>
-              )}
             </select>
             <button onClick={openOwnerEdit}
               title="작업자 목록 편집"
               className="text-slate-400 hover:text-slate-700 text-xs leading-none">✎</button>
           </div>
+            );
+          })()}
           {currentEntry && (
             <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
@@ -4874,11 +5094,11 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
                   <thead>
                     <tr className="bg-emerald-50/40 text-slate-500">
                       <th className="px-2 py-2 text-center font-semibold w-[40px]">No</th>
-                      <th className="px-2 py-2 text-left font-semibold">품목</th>
-                      <th className="px-2 py-2 text-left font-semibold w-[80px]">사이즈</th>
-                      <th className="px-2 py-2 text-left font-semibold w-[60px]">상/하</th>
-                      <th className="px-2 py-2 text-right font-semibold w-[80px]">수량</th>
-                      <th className="px-2 py-2 text-left font-semibold w-[150px]">작업시간</th>
+                      <th className="px-2 py-2 text-center font-semibold">품목</th>
+                      <th className="px-2 py-2 text-center font-semibold w-[80px]">사이즈</th>
+                      <th className="px-2 py-2 text-center font-semibold w-[60px]">상/하</th>
+                      <th className="px-2 py-2 text-center font-semibold w-[80px]">수량</th>
+                      <th className="px-2 py-2 text-center font-semibold w-[150px]">작업시간</th>
                       <th className="px-2 py-2 w-[40px]"></th>
                     </tr>
                   </thead>
@@ -4889,7 +5109,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
                     {productionRecords.map((r, i) => {
                       const empty = (v) => v === '' || v === null || v === undefined;
                       const emptyNum = (v) => empty(v) || Number(v) <= 0;
-                      const cellCls = (isEmpty) => `w-full px-2 py-1 border rounded text-xs focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-slate-200 ${isEmpty ? 'border-dashed border-rose-300 bg-rose-50/30' : 'border-transparent hover:border-slate-200'}`;
+                      const cellCls = (isEmpty) => `w-full px-2 py-1 border rounded text-xs text-center focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-slate-200 ${isEmpty ? 'border-dashed border-rose-300 bg-rose-50/30' : 'border-transparent hover:border-slate-200'}`;
                       return (
                         <tr key={r._id || i} className="border-t border-slate-100 hover:bg-emerald-50/20">
                           <td className="px-2 py-1 text-center text-slate-400 num">{i+1}</td>
@@ -4920,13 +5140,13 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
                             <input type="number" min="0" value={r.qty ?? ''}
                               onChange={e => updateProdRecord(i, 'qty', e.target.value === '' ? '' : Number(e.target.value) || 0)}
                               placeholder="0"
-                              className={cellCls(emptyNum(r.qty)) + ' text-right num'} />
+                              className={cellCls(emptyNum(r.qty)) + ' num'} />
                           </td>
                           <td className="px-1 py-1">
                             <input type="text" value={r.time || ''}
                               onChange={e => updateProdRecord(i, 'time', e.target.value)}
                               placeholder="8:40-10:25"
-                              className="w-full px-2 py-1 border border-transparent hover:border-slate-200 rounded text-xs num focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-slate-200" />
+                              className="w-full px-2 py-1 border border-transparent hover:border-slate-200 rounded text-xs text-center num focus:outline-none focus:ring-2 focus:ring-emerald-300 focus:border-slate-200" />
                           </td>
                           <td className="px-1 py-1 text-center">
                             <button onClick={() => removeProdRecord(i)}
@@ -4965,13 +5185,13 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
                 <thead>
                   <tr className="bg-slate-50 text-slate-500">
                     <th className="px-2 py-2 text-center font-semibold w-[40px]">No</th>
-                    <th className="px-2 py-2 text-left font-semibold">품목</th>
-                    <th className="px-2 py-2 text-left font-semibold w-[80px]">사이즈</th>
-                    <th className="px-2 py-2 text-left font-semibold w-[60px]">상/하</th>
-                    <th className="px-2 py-2 text-right font-semibold w-[80px]">수량</th>
-                    <th className="px-2 py-2 text-left font-semibold">원인</th>
-                    <th className="px-2 py-2 text-left font-semibold w-[90px]">원인공정</th>
-                    <th className="px-2 py-2 text-left font-semibold w-[90px]">처리내역</th>
+                    <th className="px-2 py-2 text-center font-semibold">품목</th>
+                    <th className="px-2 py-2 text-center font-semibold w-[80px]">사이즈</th>
+                    <th className="px-2 py-2 text-center font-semibold w-[60px]">상/하</th>
+                    <th className="px-2 py-2 text-center font-semibold w-[80px]">수량</th>
+                    <th className="px-2 py-2 text-center font-semibold">원인</th>
+                    <th className="px-2 py-2 text-center font-semibold w-[90px]">원인공정</th>
+                    <th className="px-2 py-2 text-center font-semibold w-[90px]">처리내역</th>
                     <th className="px-2 py-2 w-[40px]"></th>
                   </tr>
                 </thead>
@@ -4982,7 +5202,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
                   {inputRecords.map((r, i) => {
                     const empty = (v) => v === '' || v === null || v === undefined;
                     const emptyNum = (v) => empty(v) || Number(v) <= 0;
-                    const cellCls = (isEmpty) => `w-full px-2 py-1 border rounded text-xs focus:outline-none focus:ring-2 focus:ring-violet-300 focus:border-slate-200 ${isEmpty ? 'border-dashed border-rose-300 bg-rose-50/30' : 'border-transparent hover:border-slate-200'}`;
+                    const cellCls = (isEmpty) => `w-full px-2 py-1 border rounded text-xs text-center focus:outline-none focus:ring-2 focus:ring-violet-300 focus:border-slate-200 ${isEmpty ? 'border-dashed border-rose-300 bg-rose-50/30' : 'border-transparent hover:border-slate-200'}`;
                     return (
                       <tr key={r._id || i} className="border-t border-slate-100 hover:bg-violet-50/20">
                         <td className="px-2 py-1 text-center text-slate-400 num">{i+1}</td>
@@ -5013,7 +5233,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
                           <input type="number" min="0" value={r.qty ?? ''}
                             onChange={e => updateRecord(i, 'qty', e.target.value === '' ? '' : Number(e.target.value) || 0)}
                             placeholder="0"
-                            className={cellCls(emptyNum(r.qty)) + ' text-right num'} />
+                            className={cellCls(emptyNum(r.qty)) + ' num'} />
                         </td>
                         <td className="px-1 py-1">
                           <input type="text" list="catalog-causes" value={r.cause || ''}
@@ -5061,17 +5281,40 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
       {/* 등록된 작업일지 이력 */}
       {bunghalLog.length > 0 && (
         <Card>
-          <CardHeader title={`등록된 작업일지 · ${bunghalLog.length}건`} sub="최근 순 · 최대 30건 표시" />
+          <CardHeader title={`등록된 작업일지 · ${bunghalLog.length}건`} sub="최근 순 · 최대 30건 표시"
+            right={
+              <button onClick={() => {
+                const rows = [
+                  ['일자', '작업자', '생산량', '불량 수량', '작업시간(분)'],
+                  ...[...bunghalLog].sort((a,b) => (a.date||'') < (b.date||'') ? 1 : -1).map(e => [
+                    e.date || '',
+                    e.owner || '',
+                    (e.productionRecords||[]).reduce((s,r) => s+(Number(r.qty)||0), 0),
+                    (e.records||[]).reduce((s,r) => s+(Number(r.qty)||0), 0),
+                    (e.productionRecords||[]).reduce((s,r) => s+parseTimeRangeMinutes(r.time), 0),
+                  ])
+                ];
+                const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+                const blob = new Blob(['﻿'+csv], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href=url; a.download=`봉탈기록_${todayYMD()}.csv`; a.click();
+                URL.revokeObjectURL(url);
+              }}
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 flex items-center gap-1.5">
+                <Icon name="upload" size={13} className="rotate-180" />CSV 다운로드
+              </button>
+            } />
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-slate-50 text-slate-500">
-                  <th className="px-3 py-2 text-left font-semibold">일자</th>
-                  <th className="px-3 py-2 text-left font-semibold">요일</th>
-                  <th className="px-3 py-2 text-left font-semibold">작업자</th>
-                  <th className="px-3 py-2 text-right font-semibold">record</th>
-                  <th className="px-3 py-2 text-right font-semibold">총 발생</th>
-                  <th className="px-3 py-2 text-left font-semibold">최종 저장</th>
+                  <th className="px-3 py-2 text-center font-semibold">일자</th>
+                  <th className="px-3 py-2 text-center font-semibold">요일</th>
+                  <th className="px-3 py-2 text-center font-semibold">작업자</th>
+                  <th className="px-3 py-2 text-center font-semibold">생산량</th>
+                  <th className="px-3 py-2 text-center font-semibold">불량 수량</th>
+                  <th className="px-3 py-2 text-center font-semibold">작업시간</th>
+                  <th className="px-3 py-2 text-center font-semibold">최종 저장</th>
                   <th className="px-3 py-2 text-center font-semibold w-[120px]">동작</th>
                 </tr>
               </thead>
@@ -5083,16 +5326,19 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
                 }).slice(0, 30).map(e => {
                   const dow = e.date ? ['일','월','화','수','목','금','토'][parseYMD(e.date).getDay()] : '';
                   const dowCls = dow === '일' ? 'text-rose-500' : dow === '토' ? 'text-blue-500' : 'text-slate-500';
-                  const totalQty = (e.records || []).reduce((s, r) => s + (Number(r.qty) || 0), 0);
-                  const isCurrent = e.date === inputDate && (e.owner || '') === (inputOwner || '').trim();
+                  const prodQty    = (e.productionRecords || []).reduce((s, r) => s + (Number(r.qty) || 0), 0);
+                  const defectQty  = (e.records || []).reduce((s, r) => s + (Number(r.qty) || 0), 0);
+                  const workMinutes = (e.productionRecords || []).reduce((s, r) => s + parseTimeRangeMinutes(r.time), 0);
+                  const isCurrent = editingEntryId ? e.id === editingEntryId : (e.date === inputDate && (e.owner || '') === (inputOwner || '').trim());
                   return (
                     <tr key={e.id} className={`border-t border-slate-100 hover:bg-violet-50/30 ${isCurrent ? 'bg-violet-50/50' : ''}`}>
-                      <td className="px-3 py-2 text-slate-700 font-semibold whitespace-nowrap">{e.date}</td>
-                      <td className={`px-3 py-2 whitespace-nowrap ${dowCls}`}>{dow ? `${dow}요일` : '—'}</td>
-                      <td className="px-3 py-2 text-slate-700">{e.owner || '—'}</td>
-                      <td className="px-3 py-2 text-right text-slate-700">{e.records?.length || 0}건</td>
-                      <td className="px-3 py-2 text-right text-violet-700 font-bold">{totalQty}건</td>
-                      <td className="px-3 py-2 text-slate-400 text-[10px]">{fmtDateTime(e.updatedAt || e.createdAt)}</td>
+                      <td className="px-3 py-2 text-center text-slate-700 font-semibold whitespace-nowrap">{e.date}</td>
+                      <td className={`px-3 py-2 text-center whitespace-nowrap ${dowCls}`}>{dow ? `${dow}요일` : '—'}</td>
+                      <td className="px-3 py-2 text-center text-slate-700">{e.owner || '—'}</td>
+                      <td className="px-3 py-2 text-center text-emerald-700 font-bold num">{prodQty > 0 ? prodQty.toLocaleString('ko-KR') : <span className="text-slate-300">—</span>}</td>
+                      <td className="px-3 py-2 text-center text-violet-700 font-bold num">{defectQty > 0 ? defectQty : <span className="text-slate-300">—</span>}</td>
+                      <td className="px-3 py-2 text-center text-slate-600 num">{workMinutes > 0 ? `${workMinutes}분` : <span className="text-slate-300">—</span>}</td>
+                      <td className="px-3 py-2 text-center text-slate-400 text-[10px]">{fmtDateTime(e.updatedAt || e.createdAt)}</td>
                       <td className="px-3 py-2">
                         <div className="flex items-center justify-center gap-1">
                           <button onClick={() => editBunghalEntry(e)}
@@ -5164,12 +5410,12 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
             </Card>
           </div>
 
-          {/* 원인 Top 5 + 품목 Top 5 + 품목별 불량률 Top 5 */}
+          {/* 원인 Top 5 + 품목 불량률 Top 5 + 작업자별 일 평균 생산량 */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
             <Card delay={420}>
-              <CardHeader title="원인 Top 5" sub="가장 빈번한 원인" />
+              <CardHeader title={`원인 Top ${showMoreCause ? '10' : '5'}`} sub="가장 빈번한 원인" />
               <div className="p-5 space-y-2.5">
-                {causeDist.slice(0, 5).map((c, i) => {
+                {causeDist.slice(0, showMoreCause ? 10 : 5).map((c, i) => {
                   const maxQty = causeDist[0]?.qty || 1;
                   const pct = (c.qty / maxQty) * 100;
                   const colors = ['from-rose-400 to-rose-600', 'from-orange-400 to-orange-600', 'from-amber-400 to-amber-600', 'from-fuchsia-400 to-fuchsia-600', 'from-violet-400 to-violet-600'];
@@ -5191,56 +5437,32 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
                 {!causeDist.length && (
                   <div className="text-xs text-slate-400 text-center py-6">데이터 없음</div>
                 )}
-              </div>
-            </Card>
-            <Card delay={480}>
-              <CardHeader title="품목 Top 5" sub={`${crossTab.productList.length}종 중 상위 · 건수 내림차순`} />
-              <div className="p-5 space-y-2.5">
-                {crossTab.productList.slice(0, 5).map((p, i) => {
-                  const maxTotal = crossTab.productList[0]?.total || 1;
-                  const pct = (p.total / maxTotal) * 100;
-                  const rankColor = i === 0 ? 'text-rose-600 bg-rose-50' : i === 1 ? 'text-amber-600 bg-amber-50' : i === 2 ? 'text-violet-600 bg-violet-50' : 'text-slate-400 bg-slate-50';
-                  const pctOfTotal = totalQty ? Math.round(p.total / totalQty * 100) : 0;
-                  return (
-                    <div key={p.name}>
-                      <div className="flex items-baseline justify-between text-xs mb-1.5">
-                        <span className="text-slate-700 font-medium truncate flex items-baseline gap-1.5" title={p.name}>
-                          <span className={`text-[10px] num font-bold px-1.5 py-0.5 rounded ${rankColor}`}>{i+1}</span>
-                          {p.name}
-                        </span>
-                        <span className="num text-slate-500 shrink-0">
-                          <span className="font-bold text-violet-700">{p.total}</span>
-                          <span className="text-[10px] text-slate-400 ml-1">({pctOfTotal}%)</span>
-                        </span>
-                      </div>
-                      <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                        <div className="h-full bg-gradient-to-r from-violet-400 to-violet-600 rounded-full transition-all"
-                             style={{ width: `${pct}%` }}></div>
-                      </div>
-                    </div>
-                  );
-                })}
-                {!crossTab.productList.length && (
-                  <div className="text-xs text-slate-400 text-center py-6">데이터 없음</div>
+                {causeDist.length > 5 && (
+                  <button onClick={() => setShowMoreCause(v => !v)}
+                    className="w-full mt-1 py-1.5 text-[11px] font-semibold text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors">
+                    {showMoreCause ? '접기 ▲' : `더보기 +${Math.min(causeDist.length - 5, 5)} ▼`}
+                  </button>
                 )}
               </div>
             </Card>
 
-            <Card delay={540}>
-              <CardHeader title="품목 불량률 Top 5" sub="생산 대비 봉탈 % · 상대 위험" />
+            <Card delay={480}>
+              <CardHeader title={`품목 불량률 Top ${showMoreDefect ? '10' : '5'}`} sub="생산 대비 봉탈 % · 상대 위험" />
               <div className="p-5 space-y-2.5">
-                {defectRateByProduct.slice(0, 5).map((p, i) => {
+                {defectRateByProduct.slice(0, showMoreDefect ? 10 : 5).map((p, i) => {
                   const maxRate = defectRateByProduct[0]?.rate || 1;
                   const pct = (p.rate / maxRate) * 100;
                   const rateColor = p.rate >= 10 ? 'text-rose-700' : p.rate >= 5 ? 'text-amber-700' : p.rate >= 2 ? 'text-violet-700' : 'text-emerald-700';
                   const barColor = p.rate >= 10 ? 'from-rose-400 to-rose-600' : p.rate >= 5 ? 'from-amber-400 to-orange-500' : p.rate >= 2 ? 'from-violet-400 to-violet-600' : 'from-emerald-400 to-teal-500';
                   const rankColor = i === 0 ? 'text-rose-600 bg-rose-50' : i === 1 ? 'text-amber-600 bg-amber-50' : i === 2 ? 'text-violet-600 bg-violet-50' : 'text-slate-400 bg-slate-50';
+                  const posBadge = p.position === '하' ? 'text-amber-700 bg-amber-50' : p.position ? 'text-sky-700 bg-sky-50' : null;
                   return (
-                    <div key={p.name}>
+                    <div key={`${p.name}||${p.position}`}>
                       <div className="flex items-baseline justify-between text-xs mb-1.5">
                         <span className="text-slate-700 font-medium truncate flex items-baseline gap-1.5" title={p.name}>
                           <span className={`text-[10px] num font-bold px-1.5 py-0.5 rounded ${rankColor}`}>{i+1}</span>
                           {p.name}
+                          {posBadge && <span className={`text-[10px] font-bold px-1 py-0.5 rounded ${posBadge}`}>{p.position}</span>}
                         </span>
                         <span className="num shrink-0 text-right">
                           <span className={`font-bold ${rateColor}`}>{p.rate.toFixed(2)}%</span>
@@ -5260,6 +5482,59 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
                     <div className="text-[10px] mt-1">봉탈 기록에 생산 표 입력 후 다시 확인</div>
                   </div>
                 )}
+                {defectRateByProduct.length > 5 && (
+                  <button onClick={() => setShowMoreDefect(v => !v)}
+                    className="w-full mt-1 py-1.5 text-[11px] font-semibold text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors">
+                    {showMoreDefect ? '접기 ▲' : `더보기 +${Math.min(defectRateByProduct.length - 5, 5)} ▼`}
+                  </button>
+                )}
+              </div>
+            </Card>
+
+            <Card delay={540}>
+              <CardHeader title="작업자별 일 평균 생산량" sub={`${periodLabel} · 생산 표 기준`} />
+              <div className="p-5 space-y-4">
+                {workerStats.length ? workerStats.slice(0, showMoreWorker ? 10 : 5).map((w, i) => {
+                  const maxAvg = workerStats[0]?.avgPerDay || 1;
+                  const pct = (w.avgPerDay / maxAvg) * 100;
+                  const colors = [
+                    { bar: 'from-violet-400 to-indigo-500', badge: 'bg-violet-50 text-violet-700' },
+                    { bar: 'from-emerald-400 to-teal-500',  badge: 'bg-emerald-50 text-emerald-700' },
+                    { bar: 'from-amber-400 to-orange-500',  badge: 'bg-amber-50 text-amber-700' },
+                    { bar: 'from-rose-400 to-pink-500',     badge: 'bg-rose-50 text-rose-700' },
+                  ];
+                  const c = colors[i % colors.length];
+                  return (
+                    <div key={w.owner}>
+                      <div className="flex items-baseline justify-between mb-1.5">
+                        <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md num ${c.badge}`}>{w.owner}</span>
+                        <span className="num text-right">
+                          <span className="text-sm font-extrabold text-slate-800">{w.avgPerDay.toLocaleString('ko-KR')}</span>
+                          <span className="text-[11px] text-slate-400 ml-0.5">개/일</span>
+                        </span>
+                      </div>
+                      <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div className={`h-full bg-gradient-to-r ${c.bar} rounded-full transition-all`}
+                             style={{ width: `${pct}%` }}></div>
+                      </div>
+                      <div className="flex justify-between mt-1">
+                        <span className="text-[10px] text-slate-400 num">총 {w.totalQty.toLocaleString('ko-KR')}개</span>
+                        <span className="text-[10px] text-slate-400 num">{w.dayCount}일 근무</span>
+                      </div>
+                    </div>
+                  );
+                }) : (
+                  <div className="text-xs text-slate-400 text-center py-6">
+                    생산량 데이터가 없습니다
+                    <div className="text-[10px] mt-1">봉탈 기록에 생산 표 입력 후 다시 확인</div>
+                  </div>
+                )}
+                {workerStats.length > 5 && (
+                  <button onClick={() => setShowMoreWorker(v => !v)}
+                    className="w-full mt-1 py-1.5 text-[11px] font-semibold text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors">
+                    {showMoreWorker ? '접기 ▲' : `더보기 +${Math.min(workerStats.length - 5, 5)} ▼`}
+                  </button>
+                )}
               </div>
             </Card>
           </div>
@@ -5274,6 +5549,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
    ============================================================ */
 function ProductionHistoryTab({ data, onSave, onSaveTrash }) {
   const toast = useToast();
+  const dialog = useConfirm();
   const reports = useMemo(() => refreshFlatKpis(data.production || []), [data.production]);
   const trash   = data.productionTrash || [];
 
@@ -5307,14 +5583,14 @@ function ProductionHistoryTab({ data, onSave, onSaveTrash }) {
     toast(`${orig.date || ''} 복원 완료`, 'success');
   };
 
-  const permaDeleteOne = (id) => {
-    if (!confirm('이 항목을 영구 삭제할까요? 이 작업은 되돌릴 수 없습니다.')) return;
+  const permaDeleteOne = async (id) => {
+    if (!await dialog('이 항목을 영구 삭제할까요?\n이 작업은 되돌릴 수 없습니다.')) return;
     onSaveTrash(trash.filter(t => t.id !== id));
     toast('영구 삭제 완료', 'info');
   };
 
-  const emptyTrash = () => {
-    if (!confirm(`휴지통의 ${trash.length}건을 모두 영구 삭제할까요?`)) return;
+  const emptyTrash = async () => {
+    if (!await dialog(`휴지통의 ${trash.length}건을 모두 영구 삭제할까요?`)) return;
     onSaveTrash([]);
     toast('휴지통을 비웠습니다', 'info');
   };
@@ -7048,6 +7324,7 @@ function relTime(iso) {
 
 function UploadHistoryTab({ data, onSaveErp, onSaveErpTrash }) {
   const toast = useToast();
+  const dialog = useConfirm();
   const reports = data.erpReports || [];
   const trash = data.erpTrash || [];
 
@@ -7099,8 +7376,8 @@ function UploadHistoryTab({ data, onSaveErp, onSaveErpTrash }) {
     });
   };
 
-  const deleteGroup = (g) => {
-    if (!confirm(`${g.filename || '수기 입력'}\n${g.reports.length}개 일자(${g.dateFrom} ~ ${g.dateTo}) 리포트를 삭제할까요?`)) return;
+  const deleteGroup = async (g) => {
+    if (!await dialog(`${g.filename || '수기 입력'}\n${g.reports.length}개 일자 (${g.dateFrom} ~ ${g.dateTo})\n리포트를 삭제할까요?`)) return;
     const ids = new Set(g.reports.map(r => r.id));
     const now = new Date().toISOString();
     const next = reports.filter(r => !ids.has(r.id));
@@ -7132,14 +7409,14 @@ function UploadHistoryTab({ data, onSaveErp, onSaveErpTrash }) {
     toast(`${targets.length}건 복원 완료`, 'success');
   };
 
-  const permaDeleteOne = (id) => {
-    if (!confirm('이 항목을 영구 삭제할까요? 이 작업은 되돌릴 수 없습니다.')) return;
+  const permaDeleteOne = async (id) => {
+    if (!await dialog('이 항목을 영구 삭제할까요?\n이 작업은 되돌릴 수 없습니다.')) return;
     onSaveErpTrash(trash.filter(t => t.id !== id));
     toast('영구 삭제 완료', 'info');
   };
 
-  const emptyTrash = () => {
-    if (!confirm(`휴지통의 ${trash.length}건을 모두 영구 삭제할까요? 이 작업은 되돌릴 수 없습니다.`)) return;
+  const emptyTrash = async () => {
+    if (!await dialog(`휴지통의 ${trash.length}건을 모두 영구 삭제할까요?\n이 작업은 되돌릴 수 없습니다.`)) return;
     onSaveErpTrash([]);
     toast('휴지통을 비웠습니다', 'info');
   };
@@ -7359,6 +7636,7 @@ function UploadGroupCard({ g, onDeleteGroup, onDeleteReport }) {
    ============================================================ */
 function ProductionSettings({ data, onSave }) {
   const toast = useToast();
+  const dialog = useConfirm();
   const [draft, setDraft] = useState(() => ({ ...(data.targets || DEFAULT_TARGETS) }));
 
   useEffect(() => {
@@ -7386,8 +7664,8 @@ function ProductionSettings({ data, onSave }) {
     toast('생산팀 목표값 저장 완료', 'success');
   };
 
-  const handleReset = () => {
-    if (!confirm('생산팀 목표를 기본값으로 초기화할까요?')) return;
+  const handleReset = async () => {
+    if (!await dialog('생산팀 목표를 기본값으로 초기화할까요?')) return;
     setDraft({ ...DEFAULT_TARGETS });
     onSave({ ...DEFAULT_TARGETS });
     toast('기본값으로 복원', 'success');
@@ -7449,6 +7727,7 @@ function ProductionSettings({ data, onSave }) {
    ============================================================ */
 function QualitySettings({ data, onSave }) {
   const toast = useToast();
+  const dialog = useConfirm();
   const [draft, setDraft] = useState(() => ({ ...(data.qualityTargets || DEFAULT_QUALITY_TARGETS) }));
 
   useEffect(() => {
@@ -7476,8 +7755,8 @@ function QualitySettings({ data, onSave }) {
     toast('품질팀 목표값 저장 완료', 'success');
   };
 
-  const handleReset = () => {
-    if (!confirm('품질팀 목표를 기본값으로 초기화할까요?')) return;
+  const handleReset = async () => {
+    if (!await dialog('품질팀 목표를 기본값으로 초기화할까요?')) return;
     setDraft({ ...DEFAULT_QUALITY_TARGETS });
     onSave({ ...DEFAULT_QUALITY_TARGETS });
     toast('기본값으로 복원', 'success');
