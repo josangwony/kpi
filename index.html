@@ -4513,10 +4513,11 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
     // 그 일자 전체 생산량 + 퀼팅·인터 봉탈 합계
     const totalProduction = sameDayEntries.reduce((s, e) =>
       s + (e.productionRecords || []).reduce((ps, r) => ps + (Number(r.qty) || 0), 0), 0);
+    const isBunghal = r => (r.cause || '').trim() === '봉탈';
     const quiltingDefectQty = sameDayEntries.reduce((s, e) =>
-      s + (e.records || []).filter(r => r.originProc === '퀼팅').reduce((rs, r) => rs + (Number(r.qty) || 0), 0), 0);
+      s + (e.records || []).filter(r => r.originProc === '퀼팅' && isBunghal(r)).reduce((rs, r) => rs + (Number(r.qty) || 0), 0), 0);
     const interlockDefectQty = sameDayEntries.reduce((s, e) =>
-      s + (e.records || []).filter(r => r.originProc === '인터').reduce((rs, r) => rs + (Number(r.qty) || 0), 0), 0);
+      s + (e.records || []).filter(r => r.originProc === '인터' && isBunghal(r)).reduce((rs, r) => rs + (Number(r.qty) || 0), 0), 0);
 
     // 봉탈률 계산 (생산량 0이면 null)
     const quiltingRate  = totalProduction > 0 ? Math.round(quiltingDefectQty  / totalProduction * 10000) / 100 : null;
@@ -4719,6 +4720,9 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
 
   const totalQty = filtered.reduce((a, r) => a + (Number(r.qty) || 0), 0);
   const totalRecords = filtered.length;
+  // 봉탈 원인만 — 봉탈률 계산용 (업체 포함, 봉탈 외 원인 제외)
+  const bunghalOnlyQty = filtered.filter(r => (r.cause || '').trim() === '봉탈')
+                                 .reduce((a, r) => a + (Number(r.qty) || 0), 0);
 
   // 일별 추세 (라인 차트용)
   const dailyTrend = useMemo(() => {
@@ -4785,7 +4789,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
   }, [productionRecordsAll, period, selectedDay, selectedWeek, selectedMonth, effStart, effEnd]);
 
   const totalProduction = filteredProduction.reduce((s, r) => s + (Number(r.qty) || 0), 0);
-  const overallDefectRate = totalProduction > 0 ? (totalQty / totalProduction * 100) : null;
+  const overallDefectRate = totalProduction > 0 ? (bunghalOnlyQty / totalProduction * 100) : null;
 
   // 품목별 불량률 (defect qty / production qty * 100)
   const defectRateByProduct = useMemo(() => {
@@ -5480,22 +5484,22 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
                 <BunghalDonutChart items={actionDist}
                   palette={['#10B981', '#F43F5E', '#94A3B8']} />
                 {(() => {
-                  const repair  = actionDist.find(d => d.name === '수선')?.qty || 0;
-                  const discard = actionDist.find(d => d.name === '폐기')?.qty || 0;
-                  const tot = repair + discard;
-                  if (!tot) return null;
-                  const rPct = Math.round(repair  / tot * 100);
-                  const dPct = 100 - rPct;
+                  const bunghalFiltered = filtered.filter(r => (r.cause || '').trim() === '봉탈');
+                  const repair  = bunghalFiltered.filter(r => (r.action||'').trim() === '수선').reduce((a,r) => a+(Number(r.qty)||0), 0);
+                  const discard = bunghalFiltered.filter(r => (r.action||'').trim() === '폐기').reduce((a,r) => a+(Number(r.qty)||0), 0);
+                  if (!totalProduction) return null;
+                  const rPct = (repair  / totalProduction * 100).toFixed(2);
+                  const dPct = (discard / totalProduction * 100).toFixed(2);
                   return (
                     <div className="mt-3 pt-3 border-t border-slate-100 flex justify-around text-center">
                       <div>
                         <div className="text-xl font-bold text-emerald-600 num">{rPct}%</div>
-                        <div className="text-xs text-slate-500 mt-0.5">수선 <span className="text-slate-400">({repair.toLocaleString('ko-KR')}건)</span></div>
+                        <div className="text-xs text-slate-500 mt-0.5">수선율 <span className="text-slate-400">({repair.toLocaleString('ko-KR')}건)</span></div>
                       </div>
                       <div className="w-px bg-slate-100" />
                       <div>
                         <div className="text-xl font-bold text-rose-500 num">{dPct}%</div>
-                        <div className="text-xs text-slate-500 mt-0.5">폐기 <span className="text-slate-400">({discard.toLocaleString('ko-KR')}건)</span></div>
+                        <div className="text-xs text-slate-500 mt-0.5">폐기율 <span className="text-slate-400">({discard.toLocaleString('ko-KR')}건)</span></div>
                       </div>
                     </div>
                   );
