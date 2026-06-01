@@ -5479,6 +5479,26 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
               <div className="p-5">
                 <BunghalDonutChart items={actionDist}
                   palette={['#10B981', '#F43F5E', '#94A3B8']} />
+                {(() => {
+                  const repair  = actionDist.find(d => d.name === '수선')?.qty || 0;
+                  const discard = actionDist.find(d => d.name === '폐기')?.qty || 0;
+                  const tot = repair + discard;
+                  if (!tot) return null;
+                  const rPct = Math.round(repair  / tot * 100);
+                  const dPct = 100 - rPct;
+                  return (
+                    <div className="mt-3 space-y-1.5">
+                      <div className="flex h-2 rounded-full overflow-hidden">
+                        <div style={{ width: `${rPct}%` }} className="bg-emerald-400" />
+                        <div style={{ width: `${dPct}%` }} className="bg-rose-400" />
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-emerald-600 font-semibold">수선 {rPct}% <span className="text-slate-400 font-normal">({repair.toLocaleString('ko-KR')}건)</span></span>
+                        <span className="text-rose-600 font-semibold">폐기 {dPct}% <span className="text-slate-400 font-normal">({discard.toLocaleString('ko-KR')}건)</span></span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </Card>
           </div>
