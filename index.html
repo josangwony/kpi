@@ -3911,6 +3911,24 @@ function normalizeProductName(raw, catalog) {
   return out;
 }
 
+// 이미지 압축 — 최대 1500px, JPEG 85% (OCR 품질 유지하면서 전송 크기 축소)
+function compressImageDataUrl(dataUrl, maxPx = 1500, quality = 0.85) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const w = Math.round(img.width  * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => resolve(dataUrl); // 실패하면 원본 그대로
+    img.src = dataUrl;
+  });
+}
+
 // Gemini Vision에 보낼 프롬프트 (사전 + 규칙 + 자가학습 컨텍스트)
 function buildBunghalPrompt(catalog, corrections) {
   const aliasStr = Object.entries(catalog.aliases || {})
@@ -4270,7 +4288,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
       if (it.type && it.type.startsWith('image/')) {
         const blob = it.getAsFile();
         const reader = new FileReader();
-        reader.onload = ev => setPhotoDataUrl(ev.target.result);
+        reader.onload = async ev => setPhotoDataUrl(await compressImageDataUrl(ev.target.result));
         reader.readAsDataURL(blob);
         e.preventDefault();
         return;
@@ -4280,7 +4298,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
   const onPickFile = (file) => {
     if (!file || !file.type.startsWith('image/')) return;
     const reader = new FileReader();
-    reader.onload = ev => setPhotoDataUrl(ev.target.result);
+    reader.onload = async ev => setPhotoDataUrl(await compressImageDataUrl(ev.target.result));
     reader.readAsDataURL(file);
   };
 
@@ -5346,7 +5364,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
                     e.owner || '',
                     (e.productionRecords||[]).reduce((s,r) => s+(Number(r.qty)||0), 0),
                     (e.records||[]).reduce((s,r) => s+(Number(r.qty)||0), 0),
-                    (e.productionRecords||[]).reduce((s,r) => s+parseTimeRangeMinutes(r.time), 0),
+                    [...new Set((e.productionRecords||[]).map(r=>r.time).filter(Boolean))].reduce((s,t)=>s+parseTimeRangeMinutes(t),0),
                   ])
                 ];
                 const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
@@ -5383,7 +5401,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
                   const dowCls = dow === '일' ? 'text-rose-500' : dow === '토' ? 'text-blue-500' : 'text-slate-500';
                   const prodQty    = (e.productionRecords || []).reduce((s, r) => s + (Number(r.qty) || 0), 0);
                   const defectQty  = (e.records || []).reduce((s, r) => s + (Number(r.qty) || 0), 0);
-                  const workMinutes = (e.productionRecords || []).reduce((s, r) => s + parseTimeRangeMinutes(r.time), 0);
+                  const workMinutes = [...new Set((e.productionRecords||[]).map(r=>r.time).filter(Boolean))].reduce((s,t)=>s+parseTimeRangeMinutes(t),0);
                   const isCurrent = editingEntryId ? e.id === editingEntryId : (e.date === inputDate && (e.owner || '') === (inputOwner || '').trim());
                   return (
                     <tr key={e.id} className={`border-t border-slate-100 hover:bg-violet-50/30 ${isCurrent ? 'bg-violet-50/50' : ''}`}>
