@@ -3957,6 +3957,15 @@ ${aliasStr}
 - "S, "SS, "K처럼 따옴표 뒤 알파벳 = 위 행의 *품목명* 유지 + 새 사이즈
 - 따옴표 뒤 한글(상/하) = 위 행의 *품목명·사이즈* 유지 + 새 위치
 
+[작업시간 블록 규칙 — 매우 중요]
+작업시간은 여러 행이 하나의 블록을 공유할 수 있습니다.
+- "HH:MM -" (시작 시간만 있고 종료 없음) → 새 블록 시작, 이후 시간 빈 행들은 이 블록에 속함
+- 이 블록의 마지막 행(또는 독립된 행)에 단독으로 적힌 "HH:MM" → 해당 블록의 종료시간
+- 같은 블록에 속한 모든 행은 time = "시작-종료" (예: "13:00-17:05")
+- 예시: 행2에 "13:00 -", 행3·4·5에 시간 없음, 행6에 "17:05" → 행2~6 모두 time = "13:00-17:05"
+- "HH:MM - HH:MM" 처럼 한 셀에 시작~종료가 모두 있으면 그대로 해당 행에만 적용
+- 블록 도중 중간 시간(예: "15:20", "15:40")이 있어도 그 행도 해당 블록의 time을 유지
+
 [위치 기본값 규칙]
 - "최상단", "상", "하" 중 하나가 *명확히 적혀있지 않으면* position을 "상"으로 채움
 
@@ -4285,7 +4294,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
       const mimeType = photoDataUrl.match(/^data:(.+);base64/)?.[1] || 'image/png';
       const corrections = (data.bunghalCorrections || []).slice(-30); // 최근 30개만
       const prompt = buildBunghalPrompt(catalog, corrections);
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${encodeURIComponent(apiKey)}`, {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4302,7 +4311,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
         const hint = res.status === 400 ? 'API 키가 잘못됐거나 이미지 형식이 지원되지 않습니다.'
                    : res.status === 403 ? 'API 키 권한이 없습니다. 키를 다시 확인해주세요.'
                    : res.status === 429 ? '요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.'
-                   : res.status >= 500 ? 'Gemini 서버 오류입니다. 잠시 후 다시 시도해주세요.'
+                   : res.status >= 500 ? `Gemini 서버 오류 (${res.status}). 잠시 후 다시 시도해주세요.`
                    : `오류 코드 ${res.status}`;
         throw new Error(hint);
       }
@@ -6270,10 +6279,16 @@ function ErpReportView({ report, meta, draft, onUpdateField, records = [] }) {
                     </td>
                     <td className="px-2 py-2 border-b border-r border-slate-200">
                       <div className="flex items-baseline justify-center gap-1">
-                        <input type="number" min="0" value={input ?? ''}
-                          onChange={e => onUpdateField && onUpdateField('inputQty', f.key, e.target.value === '' ? null : Number(e.target.value)||0)}
-                          placeholder="—" readOnly={!onUpdateField}
-                          className={`w-12 px-1 py-1.5 ${hasInput ? 'text-right' : 'text-center'} border border-transparent ${onUpdateField ? 'hover:border-slate-200 focus:ring-2 focus:ring-rose-300 focus:border-slate-200' : 'cursor-default'} rounded text-sm num placeholder:text-slate-300 focus:outline-none`} />
+                        {onUpdateField ? (
+                          <input type="number" min="0" value={input ?? ''}
+                            onChange={e => onUpdateField('inputQty', f.key, e.target.value === '' ? null : Number(e.target.value)||0)}
+                            placeholder="—"
+                            className={`w-12 px-1 py-1.5 ${hasInput ? 'text-right' : 'text-center'} border border-transparent hover:border-slate-200 focus:ring-2 focus:ring-rose-300 focus:border-slate-200 rounded text-sm num placeholder:text-slate-300 focus:outline-none`} />
+                        ) : (
+                          <span className={`w-12 px-1 py-1.5 text-sm num ${hasInput ? 'text-right' : 'text-center text-slate-300'}`}>
+                            {hasInput ? Number(input).toLocaleString('ko-KR') : '—'}
+                          </span>
+                        )}
                         {hasInput && <span className="text-xs text-slate-500 font-medium">EA</span>}
                       </div>
                     </td>
