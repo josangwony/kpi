@@ -4029,7 +4029,7 @@ function BunghalTrendChart({ trend }) {
         plugins: {
           legend: { display: false },
           tooltip: { backgroundColor: '#0F172A', padding: 10, displayColors: false,
-            callbacks: { title: (items) => trend[items[0].dataIndex]?.date, label: (c) => `${c.parsed.y}건` } },
+            callbacks: { title: (its) => trend[its[0].dataIndex]?.date, label: (c) => `${c.parsed.y}건` } },
         },
         scales: {
           x: { grid: { display: false }, ticks: { color: '#64748B', font: { size: 10 } } },
@@ -4039,43 +4039,44 @@ function BunghalTrendChart({ trend }) {
       plugins: [{
         id: 'bunghalDatalabels',
         afterDatasetsDraw(chart) {
-          const { ctx, scales: { x, y } } = chart;
+          const { ctx: c2, scales: { x, y } } = chart;
           const dataset = chart.data.datasets[0];
-          ctx.save();
-          ctx.font = 'bold 10px sans-serif';
-          ctx.fillStyle = '#7C3AED';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'bottom';
+          c2.save();
+          c2.font = 'bold 10px sans-serif';
+          c2.fillStyle = '#7C3AED';
+          c2.textAlign = 'center';
+          c2.textBaseline = 'bottom';
           dataset.data.forEach((val, i) => {
             if (val == null) return;
-            const xPos = x.getPixelForIndex(i);
-            const yPos = y.getPixelForValue(val);
-            ctx.fillText(val, xPos, yPos - 4);
+            c2.fillText(val, x.getPixelForIndex(i), y.getPixelForValue(val) - 4);
           });
-          ctx.restore();
+          c2.restore();
         },
       }],
     });
-    return () => { if (chartRef.current) chartRef.current.destroy(); };
+    return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; } };
   }, [trend]);
-  return <div className="h-56"><canvas ref={ref}></canvas></div>;
+  if (!trend.length) {
+    return <div className="h-56 grid place-items-center text-slate-400 text-sm">데이터 없음</div>;
+  }
+  return <div className="relative" style={{ height: '224px' }}><canvas ref={ref}></canvas></div>;
 }
 
 function BunghalDonutChart({ items, palette }) {
   const ref = useRef(null);
   const chartRef = useRef(null);
-  const colors = palette || ['#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#3B82F6', '#F43F5E', '#A855F7', '#06B6D4'];
   useEffect(() => {
     if (!ref.current) return;
     if (chartRef.current) chartRef.current.destroy();
     if (!items.length) return;
+    const colors = palette || ['#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#3B82F6', '#F43F5E', '#A855F7', '#06B6D4'];
     chartRef.current = new Chart(ref.current, {
       type: 'doughnut',
       data: {
-        labels: items.map(i => i.name),
+        labels: items.map(it => it.name),
         datasets: [{
-          data: items.map(i => i.qty),
-          backgroundColor: items.map((_, i) => colors[i % colors.length]),
+          data: items.map(it => it.qty),
+          backgroundColor: items.map((_, idx) => colors[idx % colors.length]),
           borderWidth: 0,
         }],
       },
@@ -4086,16 +4087,19 @@ function BunghalDonutChart({ items, palette }) {
           legend: { position: 'bottom', labels: { color: '#475569', font: { size: 11 }, boxWidth: 12, padding: 10 } },
           tooltip: { backgroundColor: '#0F172A', padding: 10,
             callbacks: { label: (c) => {
-              const total = items.reduce((s, i) => s + i.qty, 0);
+              const total = items.reduce((s, it) => s + it.qty, 0);
               const pct = total ? Math.round(c.parsed / total * 100) : 0;
               return ` ${c.label}: ${c.parsed}건 (${pct}%)`;
             } } },
         },
       },
     });
-    return () => { if (chartRef.current) chartRef.current.destroy(); };
-  }, [items, palette]);
-  return <div className="h-56"><canvas ref={ref}></canvas></div>;
+    return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; } };
+  }, [items]);
+  if (!items.length) {
+    return <div className="h-56 grid place-items-center text-slate-400 text-sm">데이터 없음</div>;
+  }
+  return <div className="relative" style={{ height: '224px' }}><canvas ref={ref}></canvas></div>;
 }
 
 function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorrections, onSaveGeminiKey, onSaveGeminiPassHash, mode = 'analysis' }) {
