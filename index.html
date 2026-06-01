@@ -5446,7 +5446,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
             <BunghalKpiCard label="총 발생 건수" value={totalQty} suffix="건"
               sub={`record ${totalRecords}건 · ${dayCount}일`}
               icon={<Icon name="shield" size={14} />} color="violet" delay={0} />
-            <BunghalKpiCard label="종합 불량률"
+            <BunghalKpiCard label="종합 봉탈률"
               value={overallDefectRate !== null ? overallDefectRate.toFixed(2) : '—'} suffix="%"
               sub={totalProduction ? `생산 ${totalProduction.toLocaleString('ko-KR')}건 대비` : '생산 데이터 없음'}
               icon={<Icon name="trending" size={14} />} color="rose" delay={60} />
@@ -5484,10 +5484,10 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
                 <BunghalDonutChart items={actionDist}
                   palette={['#10B981', '#F43F5E', '#94A3B8']} />
                 {(() => {
-                  const bunghalFiltered = filtered.filter(r => (r.cause || '').trim() === '봉탈');
-                  const repair  = bunghalFiltered.filter(r => (r.action||'').trim() === '수선').reduce((a,r) => a+(Number(r.qty)||0), 0);
-                  const discard = bunghalFiltered.filter(r => (r.action||'').trim() === '폐기').reduce((a,r) => a+(Number(r.qty)||0), 0);
                   if (!totalProduction) return null;
+                  const repair  = actionDist.find(d => d.name === '수선')?.qty || 0;
+                  const discard = actionDist.find(d => d.name === '폐기')?.qty || 0;
+                  if (!repair && !discard) return null;
                   const rPct = (repair  / totalProduction * 100).toFixed(2);
                   const dPct = (discard / totalProduction * 100).toFixed(2);
                   return (
