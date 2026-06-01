@@ -5487,14 +5487,15 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
                   const rPct = Math.round(repair  / tot * 100);
                   const dPct = 100 - rPct;
                   return (
-                    <div className="mt-3 space-y-1.5">
-                      <div className="flex h-2 rounded-full overflow-hidden">
-                        <div style={{ width: `${rPct}%` }} className="bg-emerald-400" />
-                        <div style={{ width: `${dPct}%` }} className="bg-rose-400" />
+                    <div className="mt-3 pt-3 border-t border-slate-100 flex justify-around text-center">
+                      <div>
+                        <div className="text-xl font-bold text-emerald-600 num">{rPct}%</div>
+                        <div className="text-xs text-slate-500 mt-0.5">수선 <span className="text-slate-400">({repair.toLocaleString('ko-KR')}건)</span></div>
                       </div>
-                      <div className="flex justify-between text-xs">
-                        <span className="text-emerald-600 font-semibold">수선 {rPct}% <span className="text-slate-400 font-normal">({repair.toLocaleString('ko-KR')}건)</span></span>
-                        <span className="text-rose-600 font-semibold">폐기 {dPct}% <span className="text-slate-400 font-normal">({discard.toLocaleString('ko-KR')}건)</span></span>
+                      <div className="w-px bg-slate-100" />
+                      <div>
+                        <div className="text-xl font-bold text-rose-500 num">{dPct}%</div>
+                        <div className="text-xs text-slate-500 mt-0.5">폐기 <span className="text-slate-400">({discard.toLocaleString('ko-KR')}건)</span></div>
                       </div>
                     </div>
                   );
