@@ -449,17 +449,25 @@ async function parseErpFile(file) {
 
 // 리포트 집계 — 1) 당일 종합 (floor별) + 2) 세부내역 (원인공정+품목 × 유형)
 function buildErpReport(records) {
-  const byFloor = { '2F': { qty: 0, amount: 0, count: 0 }, '4F': { qty: 0, amount: 0, count: 0 }, 'OUT': { qty: 0, amount: 0, count: 0 } };
+  const byFloor = {
+    '2F':  { qty: 0, amount: 0, count: 0, disposalAmount: 0, repairAmount: 0 },
+    '4F':  { qty: 0, amount: 0, count: 0, disposalAmount: 0, repairAmount: 0 },
+    'OUT': { qty: 0, amount: 0, count: 0, disposalAmount: 0, repairAmount: 0 },
+  };
   records.forEach(r => {
     const f = classifyErpFloor(r.originProc);
     byFloor[f].qty    += r.qty;
     byFloor[f].amount += r.amount;
     byFloor[f].count  += 1;
+    if (getDispositionType(r) === '폐기') byFloor[f].disposalAmount += r.amount;
+    else                                   byFloor[f].repairAmount   += r.amount;
   });
   const total = {
-    qty:    records.reduce((a,b) => a + b.qty, 0),
-    amount: records.reduce((a,b) => a + b.amount, 0),
-    count:  records.length,
+    qty:           records.reduce((a,b) => a + b.qty, 0),
+    amount:        records.reduce((a,b) => a + b.amount, 0),
+    count:         records.length,
+    disposalAmount: records.reduce((a,b) => a + (getDispositionType(b)==='폐기' ? b.amount : 0), 0),
+    repairAmount:   records.reduce((a,b) => a + (getDispositionType(b)==='수리' ? b.amount : 0), 0),
   };
 
   // 원인공정별로 그룹, 그 안에서 품목명별 cross-tab
@@ -492,6 +500,13 @@ function buildErpReport(records) {
   detailRows.sort((a,b) => b.sum - a.sum);
 
   return { byFloor, total, detailRows, typeTotals };
+}
+
+// 처리결정 필드로 폐기/수리 분류 (Excel decision 필드 또는 수동 설정 dispositionType 기준)
+function getDispositionType(r) {
+  if (r.dispositionType) return r.dispositionType;
+  const d = String(r.decision || '').trim();
+  return /폐기|파기|스크랩/i.test(d) ? '폐기' : '수리';
 }
 
 // 부적합·손실은 낮을수록 좋음 = 누적값이 target 이하면 달성
@@ -1317,10 +1332,10 @@ function DashboardPage({ data }) {
   const thisWeekKey  = `${todayIso.year}-W${pad2(todayIso.week)}`;
   const thisMonthKey = today.slice(0, 7);
 
-  // 사용자가 선택한 일/주/월 (기본 일별=어제 — 오늘은 퇴근 후 입력되는 패턴)
+  // 사용자가 선택한 일/주/월 (빈 문자열 → useEffect가 최신 데이터 기준으로 자동 설정)
   const [selectedDay, setSelectedDay] = useState(yesterday);
-  const [selectedWeek, setSelectedWeek] = useState(thisWeekKey);
-  const [selectedMonth, setSelectedMonth] = useState(thisMonthKey);
+  const [selectedWeek, setSelectedWeek] = useState('');
+  const [selectedMonth, setSelectedMonth] = useState('');
 
   // ===== Production / ERP =====
   const prodSorted = useMemo(() => refreshFlatKpis([...(data.production||[])]).sort((a,b)=> a.date < b.date ? -1 : 1), [data.production]);
@@ -1345,14 +1360,20 @@ function DashboardPage({ data }) {
     };
     prodSorted.forEach(e => addDate(e.date));
     erpSorted.forEach(r => addDate(r.reportDate));
-    // 오늘·이번 주·이번 달도 항상 포함
-    addDate(today);
     return {
       availableDays:   [...days].sort().reverse(),
       availableWeeks:  [...weeks.entries()].sort((a,b) => a[0] < b[0] ? 1 : -1),
       availableMonths: [...months.entries()].sort((a,b) => a[0] < b[0] ? 1 : -1),
     };
   }, [prodSorted, erpSorted, today]);
+
+  // 선택된 주/월이 유효 목록에 없으면 최신 데이터 기준으로 자동 조정
+  useEffect(() => {
+    if (availableWeeks.length && !availableWeeks.some(([k]) => k === selectedWeek))
+      setSelectedWeek(availableWeeks[0][0]);
+    if (availableMonths.length && !availableMonths.some(([k]) => k === selectedMonth))
+      setSelectedMonth(availableMonths[0][0]);
+  }, [availableWeeks, availableMonths]);
 
   const selectedWeekLabel  = availableWeeks.find(([k]) => k === selectedWeek)?.[1] || selectedWeek;
   const selectedMonthLabel = availableMonths.find(([k]) => k === selectedMonth)?.[1] || selectedMonth;
@@ -1421,15 +1442,23 @@ function DashboardPage({ data }) {
 
   const aggErp = (reports) => {
     const records = reports.flatMap(r => r.records || []);
-    const totalQty = records.reduce((a, r) => a + (Number(r.qty) || 0), 0);
-    const totalLoss = records.reduce((a, r) => a + (Number(r.amount) || 0), 0);
-    const byFloor = { '2F': {qty:0, amount:0}, '4F': {qty:0, amount:0}, 'OUT': {qty:0, amount:0} };
+    const totalQty    = records.reduce((a, r) => a + (Number(r.qty) || 0), 0);
+    const totalLoss   = records.reduce((a, r) => a + (Number(r.amount) || 0), 0);
+    const disposalLoss = records.reduce((a, r) => a + (getDispositionType(r)==='폐기' ? Number(r.amount)||0 : 0), 0);
+    const repairLoss   = records.reduce((a, r) => a + (getDispositionType(r)==='수리' ? Number(r.amount)||0 : 0), 0);
+    const byFloor = {
+      '2F':  { qty:0, amount:0, disposalAmount:0, repairAmount:0 },
+      '4F':  { qty:0, amount:0, disposalAmount:0, repairAmount:0 },
+      'OUT': { qty:0, amount:0, disposalAmount:0, repairAmount:0 },
+    };
     const byType  = Object.fromEntries(ERP_DEFECT_TYPES.map(t => [t, 0]));
     const vendors = new Map();
     records.forEach(r => {
       const f = classifyErpFloor(r.originProc);
       byFloor[f].qty    += Number(r.qty)    || 0;
       byFloor[f].amount += Number(r.amount) || 0;
+      if (getDispositionType(r) === '폐기') byFloor[f].disposalAmount += Number(r.amount) || 0;
+      else                                   byFloor[f].repairAmount   += Number(r.amount) || 0;
       byType[normalizeDefectType(r.typeDetail)] += Number(r.qty) || 0;
       if (r.originProc === '외주협력업체' && r.vendor) {
         const v = vendors.get(r.vendor) || { vendor: r.vendor, qty: 0, amount: 0 };
@@ -1438,7 +1467,7 @@ function DashboardPage({ data }) {
         vendors.set(r.vendor, v);
       }
     });
-    return { reports, records, totalQty, totalLoss, byFloor, byType,
+    return { reports, records, totalQty, totalLoss, disposalLoss, repairLoss, byFloor, byType,
       vendors: [...vendors.values()].sort((a,b) => b.amount - a.amount) };
   };
 
@@ -3449,8 +3478,8 @@ function ProductionSummaryTab({ data }) {
   const thisMonthKey = today.slice(0, 7);
   const [period, setPeriod] = useState('day');
   const [selectedDay, setSelectedDay]     = useState(yesterday);
-  const [selectedWeek, setSelectedWeek]   = useState(thisWeekKey);
-  const [selectedMonth, setSelectedMonth] = useState(thisMonthKey);
+  const [selectedWeek, setSelectedWeek]   = useState('');
+  const [selectedMonth, setSelectedMonth] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate]     = useState('');
 
@@ -3471,15 +3500,6 @@ function ProductionSummaryTab({ data }) {
       const ym = r.date.slice(0, 7);
       if (!months.has(ym)) months.set(ym, `${ym.slice(0,4)}년 ${Number(ym.slice(5,7))}월`);
     });
-    // 이번 주·달 보장
-    const todayY = getISOWeek(today);
-    const todayWk = `${todayY.year}-W${pad2(todayY.week)}`;
-    if (!weeks.has(todayWk)) {
-      const ml = isoWeekToMonthLabel(todayY.year, todayY.week);
-      weeks.set(todayWk, `${ml.year} ${ml.month}월 ${ml.weekOfMonth}주차`);
-    }
-    const todayYm = today.slice(0, 7);
-    if (!months.has(todayYm)) months.set(todayYm, `${todayYm.slice(0,4)}년 ${Number(todayYm.slice(5,7))}월`);
     const dsSorted = ds.sort();
     return {
       availableWeeks:  [...weeks.entries()].sort((a,b) => a[0] < b[0] ? 1 : -1),
@@ -3489,9 +3509,13 @@ function ProductionSummaryTab({ data }) {
   }, [reports, today]);
 
   useEffect(() => {
+    if (availableWeeks.length && !availableWeeks.some(([k]) => k === selectedWeek))
+      setSelectedWeek(availableWeeks[0][0]);
+    if (availableMonths.length && !availableMonths.some(([k]) => k === selectedMonth))
+      setSelectedMonth(availableMonths[0][0]);
     if (!startDate && dataRange.min) setStartDate(dataRange.min);
     if (!endDate   && dataRange.max) setEndDate(dataRange.max);
-  }, [dataRange.min, dataRange.max]);
+  }, [availableWeeks, availableMonths, dataRange.min, dataRange.max]);
 
   const [effStart, effEnd] = (startDate && endDate && startDate > endDate) ? [endDate, startDate] : [startDate, endDate];
 
@@ -4033,13 +4057,15 @@ function BunghalTrendChart({ trend }) {
         },
         scales: {
           x: { grid: { display: false }, ticks: { color: '#64748B', font: { size: 10 } } },
-          y: { beginAtZero: true, grid: { color: '#F1F5F9' }, ticks: { color: '#64748B', font: { size: 10 }, precision: 0 } },
+          y: { beginAtZero: true, grace: '5%', grid: { color: '#F1F5F9' }, ticks: { color: '#64748B', font: { size: 10 }, precision: 0 } },
         },
+        layout: { padding: { bottom: 2 } },
       },
       plugins: [{
         id: 'bunghalDatalabels',
         afterDatasetsDraw(chart) {
-          const { ctx: c2, scales: { x, y } } = chart;
+          const { ctx: c2 } = chart;
+          const meta = chart.getDatasetMeta(0);
           const dataset = chart.data.datasets[0];
           c2.save();
           c2.font = 'bold 10px sans-serif';
@@ -4048,18 +4074,25 @@ function BunghalTrendChart({ trend }) {
           c2.textBaseline = 'bottom';
           dataset.data.forEach((val, i) => {
             if (val == null) return;
-            c2.fillText(val, x.getPixelForIndex(i), y.getPixelForValue(val) - 4);
+            const pt = meta.data[i];
+            if (!pt) return;
+            c2.fillText(val, pt.x, pt.y - 4);
           });
           c2.restore();
         },
       }],
     });
+    chartRef.current.resize();
     return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; } };
   }, [trend]);
   if (!trend.length) {
     return <div className="h-56 grid place-items-center text-slate-400 text-sm">데이터 없음</div>;
   }
-  return <div className="relative" style={{ height: '224px' }}><canvas ref={ref}></canvas></div>;
+  return (
+    <div style={{ position: 'relative', height: '224px' }}>
+      <canvas ref={ref} height="224"></canvas>
+    </div>
+  );
 }
 
 function BunghalDonutChart({ items, palette }) {
@@ -4077,7 +4110,9 @@ function BunghalDonutChart({ items, palette }) {
         datasets: [{
           data: items.map(it => it.qty),
           backgroundColor: items.map((_, idx) => colors[idx % colors.length]),
-          borderWidth: 0,
+          borderColor: '#fff',
+          borderWidth: 2,
+          hoverOffset: 4,
         }],
       },
       options: {
@@ -4094,12 +4129,17 @@ function BunghalDonutChart({ items, palette }) {
         },
       },
     });
+    chartRef.current.resize();
     return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; } };
   }, [items]);
   if (!items.length) {
     return <div className="h-56 grid place-items-center text-slate-400 text-sm">데이터 없음</div>;
   }
-  return <div className="relative" style={{ height: '224px' }}><canvas ref={ref}></canvas></div>;
+  return (
+    <div style={{ position: 'relative', height: '224px' }}>
+      <canvas ref={ref} height="224"></canvas>
+    </div>
+  );
 }
 
 function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorrections, onSaveGeminiKey, onSaveGeminiPassHash, mode = 'analysis' }) {
@@ -4589,10 +4629,12 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
     };
   }, [bunghalRecords, productionRecordsAll]);
 
-  // 기본 선택 — 데이터의 가장 최근
+  // 선택된 주/월이 유효 목록에 없으면 최신 데이터 기준으로 자동 조정 (월 변경 시 선택지 없는 문제 방지)
   useEffect(() => {
-    if (!selectedWeek && availableWeeks.length)   setSelectedWeek(availableWeeks[0][0]);
-    if (!selectedMonth && availableMonths.length) setSelectedMonth(availableMonths[0][0]);
+    if (availableWeeks.length && !availableWeeks.some(([k]) => k === selectedWeek))
+      setSelectedWeek(availableWeeks[0][0]);
+    if (availableMonths.length && !availableMonths.some(([k]) => k === selectedMonth))
+      setSelectedMonth(availableMonths[0][0]);
     if (!startDate && dataRange.min) setStartDate(dataRange.min);
     if (!endDate && dataRange.max)   setEndDate(dataRange.max);
   }, [availableWeeks, availableMonths, dataRange.min, dataRange.max]);
@@ -6041,6 +6083,7 @@ function ErpReportTab({ data, onSaveErp }) {
       {!report
         ? <EmptyHint iconName="upload" msg={`${periodMetaLabel}에 해당하는 리포트가 없습니다.`} />
         : <ErpReportView report={report} meta={{ reportDate: periodMetaLabel }} draft={aggregated}
+            records={aggregated?.records || []}
             onUpdateField={filtered.length === 1 ? (field, key, val) => {
               const entry = filtered[0];
               const next = {
@@ -6139,10 +6182,26 @@ function RecordEditTable({ records, onUpdate, onAdd, onDelete }) {
   );
 }
 
-function ErpReportView({ report, meta, draft, onUpdateField }) {
+function ErpReportView({ report, meta, draft, onUpdateField, records = [] }) {
+  const [drillDown, setDrillDown] = React.useState(null);
+  // drillDown = null | { floor: '2F'|'4F'|'OUT'|null, dispositionType: '폐기'|'수리'|null, label: string }
+
+  const handleCellClick = (floor, dispositionType, label) => {
+    const key = `${floor}:${dispositionType}`;
+    setDrillDown(prev => (prev && `${prev.floor}:${prev.dispositionType}` === key) ? null : { floor, dispositionType, label });
+  };
+
+  const drillRecords = drillDown ? records.filter(r => {
+    if (drillDown.floor && classifyErpFloor(r.originProc) !== drillDown.floor) return false;
+    if (drillDown.dispositionType && getDispositionType(r) !== drillDown.dispositionType) return false;
+    return true;
+  }) : [];
+
   const grandTotal = {
-    qty:    report.byFloor['2F'].qty + report.byFloor['4F'].qty + report.byFloor.OUT.qty,
-    amount: report.byFloor['2F'].amount + report.byFloor['4F'].amount + report.byFloor.OUT.amount,
+    qty:           report.byFloor['2F'].qty + report.byFloor['4F'].qty + report.byFloor.OUT.qty,
+    amount:        report.byFloor['2F'].amount + report.byFloor['4F'].amount + report.byFloor.OUT.amount,
+    disposalAmount: (report.byFloor['2F'].disposalAmount||0) + (report.byFloor['4F'].disposalAmount||0) + (report.byFloor.OUT.disposalAmount||0),
+    repairAmount:   (report.byFloor['2F'].repairAmount||0) + (report.byFloor['4F'].repairAmount||0) + (report.byFloor.OUT.repairAmount||0),
   };
   const allTotalQty = report.total.qty;
   const incidents = (draft && draft.processIncidents) || {};
@@ -6162,26 +6221,30 @@ function ErpReportView({ report, meta, draft, onUpdateField }) {
         <div className="overflow-x-auto">
           <table className="w-full text-sm border-t border-slate-200 table-fixed">
             <colgroup>
-              <col style={{ width: '180px' }} />
-              <col style={{ width: '148px' }} />
-              <col style={{ width: '148px' }} />
-              <col style={{ width: '148px' }} />
-              <col style={{ width: '148px' }} />
-              <col style={{ width: '148px' }} />
+              <col style={{ width: '160px' }} />
+              <col style={{ width: '130px' }} />
+              <col style={{ width: '120px' }} />
+              <col style={{ width: '110px' }} />
+              <col style={{ width: '100px' }} />
+              <col style={{ width: '120px' }} />
+              <col style={{ width: '120px' }} />
+              <col style={{ width: '120px' }} />
               <col />
             </colgroup>
             <thead>
               <tr className="bg-slate-50 text-slate-700">
                 <th rowSpan={2} className="px-4 py-3 text-center font-bold border-b border-r border-slate-200">구분</th>
                 <th rowSpan={2} className="px-4 py-3 text-center font-bold border-b border-r border-slate-200 whitespace-nowrap">공정 이상발생</th>
-                <th colSpan={4} className="px-4 py-2 text-center font-bold border-b border-r border-slate-200 bg-rose-50 text-rose-700">공정부적합</th>
+                <th colSpan={6} className="px-4 py-2 text-center font-bold border-b border-r border-slate-200 bg-rose-50 text-rose-700">공정부적합</th>
                 <th rowSpan={2} className="px-4 py-3 text-center font-bold border-b border-slate-200">비고</th>
               </tr>
               <tr className="bg-slate-50 text-slate-600 text-xs">
                 <th className="px-3 py-2 text-center font-semibold border-b border-r border-slate-200">투입 수량</th>
                 <th className="px-3 py-2 text-center font-semibold border-b border-r border-slate-200">발생수량</th>
                 <th className="px-3 py-2 text-center font-semibold border-b border-r border-slate-200">부적합률</th>
-                <th className="px-3 py-2 text-center font-semibold border-b border-r border-slate-200">손실비용</th>
+                <th className="px-3 py-2 text-center font-semibold border-b border-r border-slate-200">폐기 비용</th>
+                <th className="px-3 py-2 text-center font-semibold border-b border-r border-slate-200">수리 비용</th>
+                <th className="px-3 py-2 text-center font-bold border-b border-r border-slate-200">합계</th>
               </tr>
             </thead>
             <tbody className="num">
@@ -6191,6 +6254,8 @@ function ErpReportView({ report, meta, draft, onUpdateField }) {
                 const input    = inputs[f.key];
                 const rate     = calcRate(fl.qty, input);
                 const hasInput = input != null && input !== '' && Number(input) > 0;
+                const isActive = (dt) => drillDown?.floor === f.key && drillDown?.dispositionType === dt;
+                const cellBase = 'cursor-pointer select-none';
                 return (
                   <tr key={f.key} className="hover:bg-slate-50/60">
                     <td className="px-4 py-3 text-slate-700 font-medium border-b border-r border-slate-200">{f.label}</td>
@@ -6220,7 +6285,16 @@ function ErpReportView({ report, meta, draft, onUpdateField }) {
                         ? <span className="text-slate-300">—</span>
                         : <span className="text-slate-700 font-semibold">{fmtRate(rate)}%</span>}
                     </td>
-                    <td className="px-3 py-3 text-right text-rose-700 font-semibold border-b border-r border-slate-200">
+                    <td onClick={() => handleCellClick(f.key, '폐기', `${f.label} · 폐기`)}
+                      className={`px-3 py-3 text-right text-slate-600 border-b border-r border-slate-200 ${cellBase} ${isActive('폐기') ? 'bg-slate-100 ring-1 ring-inset ring-slate-300' : 'hover:bg-slate-50'}`}>
+                      {(fl.disposalAmount||0).toLocaleString('ko-KR')} <span className="text-xs text-slate-400 font-normal">원</span>
+                    </td>
+                    <td onClick={() => handleCellClick(f.key, '수리', `${f.label} · 수리`)}
+                      className={`px-3 py-3 text-right text-slate-600 border-b border-r border-slate-200 ${cellBase} ${isActive('수리') ? 'bg-slate-100 ring-1 ring-inset ring-slate-300' : 'hover:bg-slate-50'}`}>
+                      {(fl.repairAmount||0).toLocaleString('ko-KR')} <span className="text-xs text-slate-400 font-normal">원</span>
+                    </td>
+                    <td onClick={() => handleCellClick(f.key, null, `${f.label} · 전체`)}
+                      className={`px-3 py-3 text-right text-slate-800 font-bold border-b border-r border-slate-200 ${cellBase} ${isActive(null) ? 'bg-slate-100 ring-1 ring-inset ring-slate-300' : 'hover:bg-slate-50'}`}>
                       {fl.amount.toLocaleString('ko-KR')} <span className="text-xs text-slate-500 font-normal">원</span>
                     </td>
                     <td className="px-2 py-2 border-b border-slate-200">
@@ -6263,7 +6337,16 @@ function ErpReportView({ report, meta, draft, onUpdateField }) {
                       : <span className="text-slate-900">{fmtRate(tr)}%</span>;
                   })()}
                 </td>
-                <td className="px-3 py-3 text-right text-rose-800 border-b-2 border-r border-slate-300">
+                <td onClick={() => handleCellClick(null, '폐기', 'TOTAL · 폐기')}
+                  className={`px-3 py-3 text-right text-slate-700 border-b-2 border-r border-slate-300 cursor-pointer select-none ${drillDown?.floor === null && drillDown?.dispositionType === '폐기' ? 'bg-amber-100 ring-1 ring-inset ring-amber-300' : 'hover:bg-amber-50/60'}`}>
+                  {grandTotal.disposalAmount.toLocaleString('ko-KR')} <span className="text-xs font-normal">원</span>
+                </td>
+                <td onClick={() => handleCellClick(null, '수리', 'TOTAL · 수리')}
+                  className={`px-3 py-3 text-right text-slate-700 border-b-2 border-r border-slate-300 cursor-pointer select-none ${drillDown?.floor === null && drillDown?.dispositionType === '수리' ? 'bg-amber-100 ring-1 ring-inset ring-amber-300' : 'hover:bg-amber-50/60'}`}>
+                  {grandTotal.repairAmount.toLocaleString('ko-KR')} <span className="text-xs font-normal">원</span>
+                </td>
+                <td onClick={() => handleCellClick(null, null, 'TOTAL · 전체')}
+                  className={`px-3 py-3 text-right text-slate-900 font-bold border-b-2 border-r border-slate-300 cursor-pointer select-none ${drillDown?.floor === null && drillDown?.dispositionType === null ? 'bg-amber-100 ring-1 ring-inset ring-amber-300' : 'hover:bg-amber-50/60'}`}>
                   {grandTotal.amount.toLocaleString('ko-KR')} <span className="text-xs font-normal">원</span>
                 </td>
                 <td className="px-4 py-3 border-b-2 border-slate-300"></td>
@@ -6271,6 +6354,69 @@ function ErpReportView({ report, meta, draft, onUpdateField }) {
             </tbody>
           </table>
         </div>
+
+        {/* 드릴다운 RAW 데이터 */}
+        {drillDown && (
+          <div className="border-t border-slate-200">
+            <div className="px-5 py-3 flex items-center justify-between bg-slate-50">
+              <span className="text-xs font-semibold text-slate-700">
+                RAW 데이터 · <span className="text-rose-600">{drillDown.label}</span>
+                <span className="ml-2 text-slate-400 font-normal">{drillRecords.length}건</span>
+              </span>
+              <button onClick={() => setDrillDown(null)}
+                className="text-slate-400 hover:text-slate-600 text-xs px-2 py-1 rounded hover:bg-slate-200">✕ 닫기</button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-500 border-b border-slate-200">
+                    <th className="px-3 py-2 text-center font-semibold border-r border-slate-100 w-8">No</th>
+                    <th className="px-3 py-2 text-center font-semibold border-r border-slate-100 w-20">날짜</th>
+                    <th className="px-3 py-2 text-left font-semibold border-r border-slate-100">원인공정</th>
+                    <th className="px-3 py-2 text-left font-semibold border-r border-slate-100">품목명</th>
+                    <th className="px-3 py-2 text-right font-semibold border-r border-slate-100 w-16">수량</th>
+                    <th className="px-3 py-2 text-right font-semibold border-r border-slate-100 w-20">단가</th>
+                    <th className="px-3 py-2 text-center font-semibold border-r border-slate-100 w-16">처리구분</th>
+                    <th className="px-3 py-2 text-right font-semibold border-r border-slate-100 w-28">금액 (원)</th>
+                    <th className="px-3 py-2 text-left font-semibold">부적합유형</th>
+                  </tr>
+                </thead>
+                <tbody className="num divide-y divide-slate-100">
+                  {drillRecords.map((r, i) => (
+                    <tr key={r._id || i} className="hover:bg-slate-50/60">
+                      <td className="px-3 py-2 text-center text-slate-400 border-r border-slate-100">{i + 1}</td>
+                      <td className="px-3 py-2 text-center text-slate-500 border-r border-slate-100 whitespace-nowrap">{r.date ? `${Number(r.date.slice(5,7))}/${Number(r.date.slice(8,10))}` : '—'}</td>
+                      <td className="px-3 py-2 text-slate-700 border-r border-slate-100">{r.originProc || '—'}</td>
+                      <td className="px-3 py-2 text-slate-700 border-r border-slate-100 max-w-[200px] truncate" title={r.product}>{r.product || '—'}</td>
+                      <td className="px-3 py-2 text-right text-slate-700 border-r border-slate-100">{(r.qty || 0).toLocaleString('ko-KR')}</td>
+                      <td className="px-3 py-2 text-right text-slate-500 border-r border-slate-100">{(r.unitPrice || 0).toLocaleString('ko-KR')}</td>
+                      <td className="px-3 py-2 text-center border-r border-slate-100">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${getDispositionType(r) === '폐기' ? 'bg-slate-100 text-slate-600' : 'bg-slate-100 text-slate-600'}`}>
+                          {getDispositionType(r)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold text-slate-800 border-r border-slate-100">{(r.amount || 0).toLocaleString('ko-KR')}</td>
+                      <td className="px-3 py-2 text-slate-500">{r.typeDetail || '—'}</td>
+                    </tr>
+                  ))}
+                  {drillRecords.length === 0 && (
+                    <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-400">해당 데이터 없음</td></tr>
+                  )}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-slate-50 border-t border-slate-200 font-bold">
+                    <td colSpan={4} className="px-3 py-2 text-right text-slate-600 border-r border-slate-100">합계</td>
+                    <td className="px-3 py-2 text-right text-slate-800 border-r border-slate-100">{drillRecords.reduce((a,r) => a+(r.qty||0), 0).toLocaleString('ko-KR')}</td>
+                    <td className="px-3 py-2 border-r border-slate-100"></td>
+                    <td className="px-3 py-2 border-r border-slate-100"></td>
+                    <td className="px-3 py-2 text-right text-slate-900 border-r border-slate-100">{drillRecords.reduce((a,r) => a+(r.amount||0), 0).toLocaleString('ko-KR')} 원</td>
+                    <td className="px-3 py-2"></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        )}
       </Card>
 
       {/* 세부내역 */}
