@@ -506,7 +506,7 @@ function buildErpReport(records) {
 function getDispositionType(r) {
   if (r.dispositionType) return r.dispositionType;
   const d = String(r.decision || '').trim();
-  return /폐기|파기|스크랩/i.test(d) ? '폐기' : '수리';
+  return /폐기|파기|스크랩|반품|반납/i.test(d) ? '폐기' : '수리';
 }
 
 // 부적합·손실은 낮을수록 좋음 = 누적값이 target 이하면 달성
@@ -6376,7 +6376,7 @@ function ErpReportView({ report, meta, draft, onUpdateField, records = [] }) {
                     <th className="px-3 py-2 text-left font-semibold border-r border-slate-100">품목명</th>
                     <th className="px-3 py-2 text-right font-semibold border-r border-slate-100 w-16">수량</th>
                     <th className="px-3 py-2 text-right font-semibold border-r border-slate-100 w-20">단가</th>
-                    <th className="px-3 py-2 text-center font-semibold border-r border-slate-100 w-16">처리구분</th>
+                    <th className="px-3 py-2 text-center font-semibold border-r border-slate-100 w-20">처리구분</th>
                     <th className="px-3 py-2 text-right font-semibold border-r border-slate-100 w-28">금액 (원)</th>
                     <th className="px-3 py-2 text-left font-semibold">부적합유형</th>
                   </tr>
