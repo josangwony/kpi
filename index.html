@@ -4733,6 +4733,30 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
     return xs;
   }, [bunghalRecords, typeFilter, period, selectedDay, selectedWeek, selectedMonth, effStart, effEnd]);
 
+  // 생산 records 기간 필터 (defects와 동일 기간 적용, 유형 필터는 무관)
+  const filteredProduction = useMemo(() => {
+    let xs = productionRecordsAll;
+    if (period === 'day') {
+      xs = xs.filter(r => r.date === selectedDay);
+    } else if (period === 'week' && selectedWeek) {
+      xs = xs.filter(r => {
+        if (!r.date) return false;
+        const w = getISOWeek(r.date);
+        return `${w.year}-W${pad2(w.week)}` === selectedWeek;
+      });
+    } else if (period === 'month' && selectedMonth) {
+      xs = xs.filter(r => (r.date || '').startsWith(selectedMonth));
+    } else if (period === 'range') {
+      xs = xs.filter(r => {
+        if (!r.date) return false;
+        if (effStart && r.date < effStart) return false;
+        if (effEnd && r.date > effEnd) return false;
+        return true;
+      });
+    }
+    return xs;
+  }, [productionRecordsAll, period, selectedDay, selectedWeek, selectedMonth, effStart, effEnd]);
+
   // 4) 품목 × 일자 cross-tab
   const crossTab = useMemo(() => {
     const products = new Map();          // key → { name, position, byDate }
@@ -4849,30 +4873,6 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
     });
     return [...map.entries()].map(([name, qty]) => ({ name, qty })).sort((a, b) => b.qty - a.qty);
   }, [filtered]);
-
-  // 생산 records 기간 필터 (defects와 동일 기간 적용, 유형 필터는 무관)
-  const filteredProduction = useMemo(() => {
-    let xs = productionRecordsAll;
-    if (period === 'day') {
-      xs = xs.filter(r => r.date === selectedDay);
-    } else if (period === 'week' && selectedWeek) {
-      xs = xs.filter(r => {
-        if (!r.date) return false;
-        const w = getISOWeek(r.date);
-        return `${w.year}-W${pad2(w.week)}` === selectedWeek;
-      });
-    } else if (period === 'month' && selectedMonth) {
-      xs = xs.filter(r => (r.date || '').startsWith(selectedMonth));
-    } else if (period === 'range') {
-      xs = xs.filter(r => {
-        if (!r.date) return false;
-        if (effStart && r.date < effStart) return false;
-        if (effEnd && r.date > effEnd) return false;
-        return true;
-      });
-    }
-    return xs;
-  }, [productionRecordsAll, period, selectedDay, selectedWeek, selectedMonth, effStart, effEnd]);
 
   const totalProduction = filteredProduction.reduce((s, r) => s + (Number(r.qty) || 0), 0);
   const overallDefectRate = totalProduction > 0 ? (bunghalOnlyQty / totalProduction * 100) : null;
