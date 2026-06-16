@@ -4045,12 +4045,10 @@ function BunghalKpiCard({ label, value, suffix = '', sub, icon, color = 'violet'
 }
 
 // mode: 'daily'  → { date, rate, bunghalQty, prodQty }
-//       'weekly' → { week, label, fullLabel, rate, repairRate, scrapRate, bunghalQty, repairQty, scrapQty, prodQty }
+//       'weekly' → { week, label, fullLabel, rate, bunghalQty, prodQty }
 function BunghalTrendChart({ trend, mode = 'daily' }) {
   const ref = useRef(null);
   const chartRef = useRef(null);
-  // weekly 모드이고 repairRate 필드가 있으면 수선율·폐기율 보조선 표시
-  const showSub = mode === 'weekly' && trend.length > 0 && 'repairRate' in trend[0];
 
   useEffect(() => {
     if (!ref.current) return;
@@ -4058,76 +4056,41 @@ function BunghalTrendChart({ trend, mode = 'daily' }) {
     const hasData = trend.some(t => t.rate !== null);
     if (!trend.length || !hasData) return;
     const ctx = ref.current.getContext('2d');
-    const grad = ctx.createLinearGradient(0, 0, 0, 200);
-    grad.addColorStop(0, 'rgba(139, 92, 246, 0.28)');
+    const grad = ctx.createLinearGradient(0, 0, 0, 260);
+    grad.addColorStop(0, 'rgba(139, 92, 246, 0.35)');
     grad.addColorStop(1, 'rgba(139, 92, 246, 0)');
     const xLabels = trend.map(t =>
       mode === 'weekly'
         ? t.label
         : `${Number(t.date.slice(5,7))}/${Number(t.date.slice(8,10))}`
     );
-    const mainDataset = {
-      label: '봉탈률',
-      data: trend.map(t => t.rate),
-      borderColor: '#8B5CF6',
-      backgroundColor: grad,
-      borderWidth: 2.5,
-      tension: 0.35,
-      fill: true,
-      spanGaps: false,
-      pointBackgroundColor: '#8B5CF6',
-      pointBorderColor: '#fff',
-      pointBorderWidth: 2,
-      pointRadius: 4,
-      pointHoverRadius: 6,
-    };
-    const subDatasets = showSub ? [
-      {
-        label: '수선율',
-        data: trend.map(t => t.repairRate),
-        borderColor: '#60A5FA',
-        backgroundColor: 'transparent',
-        borderWidth: 1.8,
-        borderDash: [5, 4],
-        tension: 0.35,
-        fill: false,
-        spanGaps: false,
-        pointBackgroundColor: '#60A5FA',
-        pointBorderColor: '#fff',
-        pointBorderWidth: 1.5,
-        pointRadius: 3,
-        pointHoverRadius: 5,
-      },
-      {
-        label: '폐기율',
-        data: trend.map(t => t.scrapRate),
-        borderColor: '#FB7185',
-        backgroundColor: 'transparent',
-        borderWidth: 1.8,
-        borderDash: [5, 4],
-        tension: 0.35,
-        fill: false,
-        spanGaps: false,
-        pointBackgroundColor: '#FB7185',
-        pointBorderColor: '#fff',
-        pointBorderWidth: 1.5,
-        pointRadius: 3,
-        pointHoverRadius: 5,
-      },
-    ] : [];
-
     chartRef.current = new Chart(ref.current, {
       type: 'line',
-      data: { labels: xLabels, datasets: [mainDataset, ...subDatasets] },
+      data: {
+        labels: xLabels,
+        datasets: [{
+          label: '봉탈률',
+          data: trend.map(t => t.rate),
+          borderColor: '#8B5CF6',
+          backgroundColor: grad,
+          borderWidth: 2.5,
+          tension: 0.35,
+          fill: true,
+          spanGaps: false,
+          pointBackgroundColor: '#8B5CF6',
+          pointBorderColor: '#fff',
+          pointBorderWidth: 2,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+        }],
+      },
       options: {
         responsive: true, maintainAspectRatio: false,
         animation: { duration: 800, easing: 'easeOutQuart' },
         plugins: {
           legend: { display: false },
           tooltip: {
-            mode: 'index', intersect: false,
-            backgroundColor: '#0F172A', padding: 10,
-            displayColors: showSub,
+            backgroundColor: '#0F172A', padding: 10, displayColors: false,
             callbacks: {
               title: (its) => {
                 const t = trend[its[0].dataIndex];
@@ -4136,18 +4099,10 @@ function BunghalTrendChart({ trend, mode = 'daily' }) {
               label: (c) => {
                 const t = trend[c.dataIndex];
                 if (!t) return '';
-                const val = c.parsed.y;
-                const name = c.dataset.label;
-                if (name === '봉탈률') {
-                  const lines = [];
-                  if (t.rate !== null) lines.push(`봉탈률: ${t.rate.toFixed(2)}%`);
-                  lines.push(`봉탈 ${(t.bunghalQty||0).toLocaleString('ko-KR')}건 · 생산 ${(t.prodQty||0).toLocaleString('ko-KR')}건`);
-                  return lines;
-                }
-                if (val === null || val === undefined) return '';
-                if (name === '수선율') return `수선율: ${val.toFixed(2)}%  (${(t.repairQty||0).toLocaleString('ko-KR')}건)`;
-                if (name === '폐기율') return `폐기율: ${val.toFixed(2)}%  (${(t.scrapQty||0).toLocaleString('ko-KR')}건)`;
-                return `${name}: ${val.toFixed(2)}%`;
+                const lines = [];
+                if (t.rate !== null) lines.push(`봉탈률: ${t.rate.toFixed(2)}%`);
+                lines.push(`봉탈 ${(t.bunghalQty||0).toLocaleString('ko-KR')}건 · 생산 ${(t.prodQty||0).toLocaleString('ko-KR')}건`);
+                return lines;
               },
             },
           },
@@ -4184,33 +4139,15 @@ function BunghalTrendChart({ trend, mode = 'daily' }) {
     });
     chartRef.current.resize();
     return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; } };
-  }, [trend, mode, showSub]);
+  }, [trend, mode]);
 
   if (!trend.length || !trend.some(t => t.rate !== null)) {
-    return <div className="h-56 grid place-items-center text-slate-400 text-sm">생산 데이터 없음 — 봉탈률을 계산하려면 생산량을 먼저 입력해주세요</div>;
+    return <div className="h-64 grid place-items-center text-slate-400 text-sm">생산 데이터 없음 — 봉탈률을 계산하려면 생산량을 먼저 입력해주세요</div>;
   }
   return (
-    <Fragment>
-      {showSub && (
-        <div className="px-5 pt-1 pb-2 flex gap-5 text-[11px] text-slate-500">
-          <span className="flex items-center gap-1.5">
-            <span style={{display:'inline-block',width:14,height:2.5,background:'#8B5CF6',borderRadius:2,verticalAlign:'middle'}} />
-            봉탈률
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span style={{display:'inline-block',width:14,borderTop:'2px dashed #60A5FA',verticalAlign:'middle'}} />
-            수선율
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span style={{display:'inline-block',width:14,borderTop:'2px dashed #FB7185',verticalAlign:'middle'}} />
-            폐기율
-          </span>
-        </div>
-      )}
-      <div style={{ position: 'relative', height: '224px' }}>
-        <canvas ref={ref} height="224"></canvas>
-      </div>
-    </Fragment>
+    <div style={{ position: 'relative', height: '280px' }}>
+      <canvas ref={ref} height="280"></canvas>
+    </div>
   );
 }
 
@@ -4274,7 +4211,8 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
 
   const [period, setPeriod] = useState('week');
   const [selectedDay, setSelectedDay] = useState(yesterday);
-  const [selectedWeeks, setSelectedWeeks] = useState(() => { const iso = getISOWeek(today); return [`${iso.year}-W${pad2(iso.week)}`]; });
+  const [weekStart, setWeekStart] = useState('');
+  const [weekEnd,   setWeekEnd]   = useState('');
   const [selectedMonth, setSelectedMonth] = useState(() => today.slice(0, 7));
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -4752,9 +4690,11 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
   // 선택된 주/월이 유효 목록에 없으면 최신 데이터 기준으로 자동 조정 (월 변경 시 선택지 없는 문제 방지)
   useEffect(() => {
     if (availableWeeks.length) {
-      const valid = selectedWeeks.filter(k => availableWeeks.some(([ak]) => ak === k));
-      if (!valid.length) setSelectedWeeks(availableWeeks.slice(0, 4).map(([k]) => k));
-      else if (valid.length !== selectedWeeks.length) setSelectedWeeks(valid);
+      const asc = [...availableWeeks].reverse(); // 오름차순
+      if (!weekEnd || !availableWeeks.some(([k]) => k === weekEnd))
+        setWeekEnd(availableWeeks[0][0]); // 최신 주
+      if (!weekStart || !availableWeeks.some(([k]) => k === weekStart))
+        setWeekStart(asc[Math.max(0, asc.length - 8)][0]); // 최대 8주 전
     }
     if (availableMonths.length && !availableMonths.some(([k]) => k === selectedMonth))
       setSelectedMonth(availableMonths[0][0]);
@@ -4772,11 +4712,13 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
 
     if (period === 'day') {
       xs = xs.filter(r => r.date === selectedDay);
-    } else if (period === 'week' && selectedWeeks.length) {
+    } else if (period === 'week') {
+      const [ws, we] = weekStart <= weekEnd ? [weekStart, weekEnd] : [weekEnd, weekStart];
       xs = xs.filter(r => {
         if (!r.date) return false;
         const w = getISOWeek(r.date);
-        return selectedWeeks.includes(`${w.year}-W${pad2(w.week)}`);
+        const wk = `${w.year}-W${pad2(w.week)}`;
+        return wk >= ws && wk <= we;
       });
     } else if (period === 'month' && selectedMonth) {
       xs = xs.filter(r => (r.date || '').startsWith(selectedMonth));
@@ -4789,18 +4731,20 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
       });
     }
     return xs;
-  }, [bunghalRecords, typeFilter, period, selectedDay, selectedWeeks, selectedMonth, effStart, effEnd]);
+  }, [bunghalRecords, typeFilter, period, selectedDay, weekStart, weekEnd, selectedMonth, effStart, effEnd]);
 
   // 생산 records 기간 필터 (defects와 동일 기간 적용, 유형 필터는 무관)
   const filteredProduction = useMemo(() => {
     let xs = productionRecordsAll;
     if (period === 'day') {
       xs = xs.filter(r => r.date === selectedDay);
-    } else if (period === 'week' && selectedWeeks.length) {
+    } else if (period === 'week') {
+      const [ws, we] = weekStart <= weekEnd ? [weekStart, weekEnd] : [weekEnd, weekStart];
       xs = xs.filter(r => {
         if (!r.date) return false;
         const w = getISOWeek(r.date);
-        return selectedWeeks.includes(`${w.year}-W${pad2(w.week)}`);
+        const wk = `${w.year}-W${pad2(w.week)}`;
+        return wk >= ws && wk <= we;
       });
     } else if (period === 'month' && selectedMonth) {
       xs = xs.filter(r => (r.date || '').startsWith(selectedMonth));
@@ -4813,7 +4757,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
       });
     }
     return xs;
-  }, [productionRecordsAll, period, selectedDay, selectedWeeks, selectedMonth, effStart, effEnd]);
+  }, [productionRecordsAll, period, selectedDay, weekStart, weekEnd, selectedMonth, effStart, effEnd]);
 
   // 4) 품목 × 일자 cross-tab
   const crossTab = useMemo(() => {
@@ -4865,25 +4809,21 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
       .filter(d => d.prodQty > 0);
   }, [filtered, filteredProduction]);
 
-  // 주별 추세 — 봉탈률(%), 독립 범위 (trendStartWeek ~ trendEndWeek)
+  // 주별 추세 — 봉탈률(%), weekStart ~ weekEnd 범위
   const weeklyTrendData = useMemo(() => {
-    if (!selectedWeeks.length) return [];
+    if (!weekStart || !weekEnd) return [];
+    const [ws, we] = weekStart <= weekEnd ? [weekStart, weekEnd] : [weekEnd, weekStart];
 
     let bRecs = bunghalRecords;
     if (typeFilter === 'quilting') bRecs = bRecs.filter(r => r.originProc === '퀼팅');
     else if (typeFilter === 'inter') bRecs = bRecs.filter(r => r.originProc === '인터');
 
     const bunghalByWeek = new Map();
-    const repairByWeek  = new Map();
-    const scrapByWeek   = new Map();
     bRecs.filter(r => (r.cause||'').trim() === '봉탈').forEach(r => {
       if (!r.date) return;
       const w = getISOWeek(r.date);
       const wk = `${w.year}-W${pad2(w.week)}`;
-      const q = Number(r.qty) || 0;
-      bunghalByWeek.set(wk, (bunghalByWeek.get(wk) || 0) + q);
-      if (getDispositionType(r) === '수리') repairByWeek.set(wk, (repairByWeek.get(wk) || 0) + q);
-      else                                   scrapByWeek.set(wk,  (scrapByWeek.get(wk)  || 0) + q);
+      bunghalByWeek.set(wk, (bunghalByWeek.get(wk) || 0) + (Number(r.qty) || 0));
     });
     const prodByWeek = new Map();
     productionRecordsAll.forEach(r => {
@@ -4894,23 +4834,15 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
     });
 
     return [...availableWeeks]
-      .filter(([k]) => selectedWeeks.includes(k))
+      .filter(([k]) => k >= ws && k <= we)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([k, fullLabel]) => {
         const bQty = bunghalByWeek.get(k) || 0;
-        const rQty = repairByWeek.get(k)  || 0;
-        const sQty = scrapByWeek.get(k)   || 0;
         const pQty = prodByWeek.get(k)    || 0;
         const shortLabel = fullLabel.replace(/^\d{4}\s/, '').replace('주차', '주');
-        return {
-          week: k, label: shortLabel, fullLabel,
-          rate:       pQty > 0 ? bQty / pQty * 100 : null,
-          repairRate: pQty > 0 ? rQty / pQty * 100 : null,
-          scrapRate:  pQty > 0 ? sQty / pQty * 100 : null,
-          bunghalQty: bQty, repairQty: rQty, scrapQty: sQty, prodQty: pQty,
-        };
+        return { week: k, label: shortLabel, fullLabel, rate: pQty > 0 ? bQty / pQty * 100 : null, bunghalQty: bQty, prodQty: pQty };
       });
-  }, [bunghalRecords, productionRecordsAll, typeFilter, availableWeeks, selectedWeeks]);
+  }, [bunghalRecords, productionRecordsAll, typeFilter, availableWeeks, weekStart, weekEnd]);
 
   // 원인 분포 (막대)
   const causeDist = useMemo(() => {
@@ -5006,12 +4938,11 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
       return `${selectedDay}${tag}`;
     }
     if (period === 'week') {
-      if (!selectedWeeks.length) return '주 선택 없음';
-      if (selectedWeeks.length === 1) return availableWeeks.find(([k]) => k === selectedWeeks[0])?.[1] || selectedWeeks[0];
-      const sorted = [...selectedWeeks].sort();
-      const s = availableWeeks.find(([k]) => k === sorted[0])?.[1]?.replace(/^\d{4}\s/, '') || sorted[0];
-      const e = availableWeeks.find(([k]) => k === sorted[sorted.length - 1])?.[1]?.replace(/^\d{4}\s/, '') || sorted[sorted.length - 1];
-      return `${s} ~ ${e} (${selectedWeeks.length}주)`;
+      if (!weekStart || !weekEnd) return '주 선택';
+      const [ws, we] = weekStart <= weekEnd ? [weekStart, weekEnd] : [weekEnd, weekStart];
+      const sLabel = availableWeeks.find(([k]) => k === ws)?.[1]?.replace(/^\d{4}\s/, '') || ws;
+      const eLabel = availableWeeks.find(([k]) => k === we)?.[1]?.replace(/^\d{4}\s/, '') || we;
+      return ws === we ? (availableWeeks.find(([k]) => k === ws)?.[1] || ws) : `${sLabel} ~ ${eLabel}`;
     }
     if (period === 'month') return availableMonths.find(([k]) => k === selectedMonth)?.[1] || selectedMonth;
     if (period === 'range') return effStart && effEnd ? `${effStart} ~ ${effEnd}` : '기간 선택';
@@ -5105,28 +5036,17 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
                 accent="indigo" />
             )}
             {period === 'week' && availableWeeks.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 items-center">
-                <button
-                  onClick={() => setSelectedWeeks(availableWeeks.map(([k]) => k))}
-                  className="px-2 py-1 text-[11px] font-semibold rounded-md border border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100 transition-colors">
-                  전체
-                </button>
-                {[...availableWeeks].reverse().map(([k, l]) => {
-                  const active = selectedWeeks.includes(k);
-                  return (
-                    <button key={k}
-                      onClick={() => setSelectedWeeks(prev =>
-                        prev.includes(k) ? prev.filter(w => w !== k) : [...prev, k]
-                      )}
-                      className={`px-2.5 py-1 text-[11px] font-semibold rounded-md border transition-colors
-                        ${active
-                          ? 'bg-violet-600 text-white border-violet-600'
-                          : 'bg-white text-slate-500 border-slate-200 hover:border-violet-300 hover:text-violet-600'
-                        }`}>
-                      {l.replace(/^\d{4}\s/, '')}
-                    </button>
-                  );
-                })}
+              <div className="flex items-center gap-2 flex-wrap">
+                <select value={weekStart} onChange={e => setWeekStart(e.target.value)}
+                  className="px-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                  {[...availableWeeks].reverse().map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+                <span className="text-xs text-slate-400">~</span>
+                <select value={weekEnd} onChange={e => setWeekEnd(e.target.value)}
+                  className="px-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-300">
+                  {[...availableWeeks].reverse().map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+                <span className="text-[11px] text-slate-400">{weeklyTrendData.length}주</span>
               </div>
             )}
             {period === 'month' && availableMonths.length > 0 && (
@@ -5649,7 +5569,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
             <Card className="lg:col-span-2" delay={240}>
               {period === 'week' ? (
                 <Fragment>
-                  <CardHeader title="주별 봉탈률 추세" sub={`${selectedWeeks.length}주 선택 · 봉탈률`} />
+                  <CardHeader title="주별 봉탈률 추세" sub={`${weeklyTrendData.length}주 · 봉탈률`} />
                   <div className="p-5 pt-3">
                     <BunghalTrendChart trend={weeklyTrendData} mode="weekly" />
                   </div>
