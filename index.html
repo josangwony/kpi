@@ -16,34 +16,37 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 
-<!-- Firebase -->
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 <script>
-  const firebaseConfig = {
-    apiKey: "AIzaSyASvYYsqz9G9pFqu8SbKUtLAm0cbBwsCpQ",
-    authDomain: "spring-6bcfc.firebaseapp.com",
-    projectId: "spring-6bcfc",
-    storageBucket: "spring-6bcfc.firebasestorage.app",
-    messagingSenderId: "175959905760",
-    appId: "1:175959905760:web:7b6ffc1c839fcf0c27c785"
-  };
-  firebase.initializeApp(firebaseConfig);
-  const _db = firebase.firestore();
-  const _isDev = location.protocol === 'file:' || ['localhost', '127.0.0.1'].includes(location.hostname);
-  const _DOC = _db.collection("kpidb_v2").doc(_isDev ? "dev" : "main");
-
+  const _ENV = location.protocol === 'file:' ? 'dev' : 'main';
   window.__fb = {
     get: async () => {
-      try { const s = await _DOC.get(); return s.exists ? s.data() : {}; }
-      catch(e) { console.warn("FB get error", e); return {}; }
+      try {
+        const r = await fetch(`/api/data?env=${_ENV}`);
+        return r.ok ? await r.json() : {};
+      } catch(e) { console.warn('API get error', e); return {}; }
     },
     set: async (key, val) => {
-      try { await _DOC.set({ [key]: JSON.stringify(val) }, { merge: true }); }
-      catch(e) { console.warn("FB set error", e); }
+      try {
+        const r = await fetch(`/api/data?env=${_ENV}`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({key, value: JSON.stringify(val)})
+        });
+        if (!r.ok) console.warn('API set error', r.status);
+      } catch(e) { console.warn('API set error', e); }
     },
-    listen: (cb) => _DOC.onSnapshot(s => { if(s.exists) cb(s.data()); })
+    listen: (cb) => {
+      const id = setInterval(async () => {
+        try {
+          const r = await fetch(`/api/data?env=${_ENV}`);
+          if (r.ok) cb(await r.json());
+        } catch(e) {}
+      }, 30000);
+      return () => clearInterval(id);
+    }
   };
+  window.__fbReady = true;
+  document.dispatchEvent(new Event('fbReady'));
 </script>
 
 <script>
@@ -637,7 +640,7 @@ const DEFAULT_PRODUCT_CATALOG = {
   causes:    ['봉탈', '재작업 부족', '스펀지 접힘', '원단 부족(수선)', '오염', '이물', '기타'],
   origins:   ['퀼팅', '인터', '업체', '수선'],
   actions:   ['수선', '폐기'],
-  owners:    ['진아라', '옥사나'],
+  owners:    ['인터 #1', '인터 #2'],
 };
 const LS = {
   get: (k, fallback) => {
@@ -1113,9 +1116,6 @@ function HomePage({ navigate, data }) {
             ))}
           </div>
 
-          <footer className="text-center mt-12 text-xs text-slate-400 animate-fade-up" style={{animationDelay:'600ms'}}>
-            데이터는 Firebase에 저장되어 팀원과 실시간 공유됩니다 · v2.0
-          </footer>
         </div>
       </div>
     </div>
@@ -1216,6 +1216,45 @@ function CardHeader({ title, sub, right }) {
     </div>
   );
 }
+/* ============================================================
+   11-C) OwnerSelectModal — 인식 후 설비 선택 팝업
+   ============================================================ */
+function OwnerSelectModal({ owners, onSelect, onClose }) {
+  useEffect(() => {
+    const h = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', h);
+    return () => document.removeEventListener('keydown', h);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 animate-fade-in"
+         style={{ background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(4px)' }}
+         onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xs p-6 animate-pop"
+           onClick={e => e.stopPropagation()}>
+        <div className="flex items-start gap-3 mb-5">
+          <div className="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center shrink-0 text-xl">🖨️</div>
+          <div>
+            <h3 className="font-bold text-slate-800 text-base leading-tight">어느 설비로 저장할까요?</h3>
+            <p className="text-xs text-slate-500 mt-1">인식된 작업일지를 저장할 설비를 선택해주세요.</p>
+          </div>
+        </div>
+        <div className="flex gap-3 mb-3">
+          {owners.map((owner, i) => (
+            <button key={owner} onClick={() => onSelect(owner)} autoFocus={i === 0}
+              className="flex-1 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm transition-colors">
+              {owner}
+            </button>
+          ))}
+        </div>
+        <button onClick={onClose}
+          className="w-full py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-semibold transition-colors">
+          취소
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Field({ label, hint, children, className = '' }) {
   return (
     <label className={`block ${className}`}>
@@ -3234,9 +3273,9 @@ function TaskInputCard({ num, task, value, onUpdate, accent }) {
    22-A2) WEEKLY JOURNAL TAB — 공정별 담당자 주간 성장 기록
    ============================================================ */
 const JOURNAL_OWNERS = {
-  foam:     ['고영주'],
-  quilting: ['조상원'],
-  spring:   ['김민현'],
+  foam:     ['work'],
+  quilting: ['work'],
+  spring:   ['work'],
 };
 
 // 주간 기록 시작 주차 (2026 5월 3주차) — 이전 주차는 노출하지 않음
@@ -3387,7 +3426,7 @@ function JournalCell({ owner, value, onCommit }) {
 
   return (
     <div>
-      <label className="block text-[11px] text-slate-500 font-semibold mb-1">{owner}</label>
+      {owner && owner !== 'work' && <label className="block text-[11px] text-slate-500 font-semibold mb-1">{owner}</label>}
       <textarea
         value={draft}
         onChange={e => setDraft(e.target.value)}
@@ -4006,7 +4045,7 @@ ${corrStr}
 - 구조: { "meta": { "date": "...", "owner": "..." }, "production": [...], "defects": [...] }
 - 예시:
 {
-  "meta": { "date": "2026-05-21", "owner": "진아라" },
+  "meta": { "date": "2026-05-21", "owner": "인터 #1" },
   "production": [
     {"product":"쿠시노","size":"SS","position":"상","qty":32,"time":"8:40-10:25"},
     {"product":"하프문","size":"Q","position":"상","qty":2,"time":""}
@@ -4229,6 +4268,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
   const [inputOwner, setInputOwner] = useState(() => localStorage.getItem('kpi_owner_bunghal') || '');
   const [editingEntryId, setEditingEntryId] = useState(null); // 편집 중인 항목 ID (owner 변경 시 신규 생성 방지)
   const [ownerAlert, setOwnerAlert] = useState(null); // 미등록 작업자 팝업 { recognized, reason }
+  const [ownerSelectModal, setOwnerSelectModal] = useState(false); // 인식 후 설비 선택 모달
   const [inputRecords, setInputRecords] = useState([]);
   const [productionRecords, setProductionRecords] = useState([]);  // 생산량 (상단 표)
   const [originalRecords, setOriginalRecords] = useState([]); // 인식 직후 원본 (수정 비교용)
@@ -4402,30 +4442,24 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
       setProductionRecords(prodRecs.length ? prodRecs : [makeEmptyProductionRecord()]);
       setOriginalRecords(defectRecords.map(r => ({ ...r })));
 
-      // meta 처리 — 일자·작업자 인식
+      // meta 처리 — 날짜 인식 (작업자는 설비 선택 모달로 대체)
       const meta = (!Array.isArray(parsed) && parsed.meta) ? parsed.meta : {};
       const recoDate = String(meta.date || '').trim();
-      const rawOwner = String(meta.owner || '').trim();
-      const recoOwner = snapToKnownOwner(rawOwner, catalog.owners);
-      const ownerInCatalog = (catalog.owners || []).includes(recoOwner);
       const dateValid = /^\d{4}-\d{2}-\d{2}$/.test(recoDate);
       const dateDiff = dateValid && recoDate !== inputDate;
-      const ownerDiff = ownerInCatalog && recoOwner && recoOwner !== inputOwner;
 
-      if (dateDiff || ownerDiff) {
-        const msg = `인식: ${dateValid ? recoDate : '?'} · ${ownerInCatalog ? recoOwner : '?'}\n헤더: ${inputDate} · ${inputOwner || '—'}\n\n헤더를 갱신할까요?`;
-        if (await dialog(msg)) {
+      if (dateDiff) {
+        if (await dialog(`인식된 날짜: ${recoDate}\n현재 헤더: ${inputDate}\n\n날짜를 갱신할까요?`)) {
           skipReloadRef.current = true;
-          if (dateValid) setInputDate(recoDate);
-          if (ownerInCatalog && recoOwner) handleSaveOwner(recoOwner);
-          toast(`헤더 갱신 → ${dateValid ? recoDate : inputDate} · ${ownerInCatalog ? recoOwner : inputOwner}`, 'success');
+          setInputDate(recoDate);
+          toast(`날짜 갱신 → ${recoDate}`, 'success');
         }
       }
-      // 인식된 작업자가 목록에 없으면 팝업 (저장 막힘)
-      if (rawOwner && !ownerInCatalog) {
-        setOwnerAlert({ recognized: rawOwner, reason: 'recognition' });
+      // 설비 선택 모달 (작업자 이름 인식 대신 직접 선택)
+      if (catalog.owners && catalog.owners.length > 0) {
+        setOwnerSelectModal(true);
       }
-      toast(`생산 ${prodRecs.length}건 · 부적합 ${defectRecords.length}건 인식 완료 — 검토 후 저장`, 'success');
+      toast(`생산 ${prodRecs.length}건 · 부적합 ${defectRecords.length}건 인식 완료 — 설비를 선택해주세요`, 'success');
     } catch (e) {
       console.error(e);
       toast('인식 실패: ' + e.message, 'error');
@@ -4437,12 +4471,12 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
   // 일자·작업자 변경 시 — 그 일자+작업자 entry 있으면 로드 (date+owner unique key)
   useEffect(() => {
     if (skipReloadRef.current) { skipReloadRef.current = false; return; }
-    // 편집 모드(editingEntryId 설정됨): 작업자 변경 시 records 초기화 방지
     if (editingEntryId) return;
+    if (originalRecords.length) return; // 인식 직후 — 저장 전까지 records 보호
     const ex = bunghalLog.find(e => e.date === inputDate && (e.owner || '') === (inputOwner || '').trim());
     setInputRecords(ex && ex.records ? ex.records : [makeEmptyBunghalRecord()]);
     setProductionRecords(ex && ex.productionRecords ? ex.productionRecords : [makeEmptyProductionRecord()]);
-  }, [inputDate, inputOwner, bunghalLog]); // editingEntryId는 의도적으로 deps 제외
+  }, [inputDate, inputOwner, bunghalLog, originalRecords]); // editingEntryId는 의도적으로 deps 제외
 
   const handleSaveOwner = (name) => {
     setInputOwner(name);
@@ -4953,16 +4987,21 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
 
   return (
     <Fragment>
-      {/* 미등록 작업자 팝업 */}
+      {/* 설비 선택 모달 (인식 완료 후) */}
+      {ownerSelectModal && catalog.owners && catalog.owners.length > 0 && (
+        <OwnerSelectModal
+          owners={catalog.owners}
+          onSelect={(owner) => { skipReloadRef.current = true; handleSaveOwner(owner); setOwnerSelectModal(false); }}
+          onClose={() => setOwnerSelectModal(false)}
+        />
+      )}
+
+      {/* 미등록 작업자 팝업 (저장 시 검증) */}
       {ownerAlert && (
         <AlertModal
           title="작업자를 선택해주세요"
-          message={
-            ownerAlert.reason === 'recognition'
-              ? '인식된 작업자명이 목록에 없습니다. 드롭다운에서 올바른 작업자를 선택한 후 저장해주세요.'
-              : '등록된 작업자를 선택해야 저장할 수 있습니다.'
-          }
-          detail={ownerAlert.recognized ? `인식된 이름: "${ownerAlert.recognized}"` : null}
+          message="등록된 작업자를 선택해야 저장할 수 있습니다."
+          detail={ownerAlert.recognized ? `현재 선택: "${ownerAlert.recognized}"` : null}
           onClose={() => setOwnerAlert(null)}
         />
       )}
@@ -5107,7 +5146,7 @@ function BunghalAnalysisTab({ data, onSave, onSaveLog, onSaveCatalog, onSaveCorr
             <div className="basis-full mt-2 p-3 bg-white border border-slate-200 rounded-lg flex items-center gap-2 animate-slide-down">
               <span className="text-[10px] text-slate-500 font-semibold whitespace-nowrap">작업자 목록 (콤마로 구분)</span>
               <input type="text" value={ownerEditText} onChange={e => setOwnerEditText(e.target.value)}
-                placeholder="진아라, 옥사나, …"
+                placeholder="인터 #1, 인터 #2, …"
                 onKeyDown={e => e.key === 'Enter' && saveOwnerEdit()}
                 className="flex-1 px-2 py-1 text-xs border border-slate-200 rounded focus:outline-none focus:ring-2 focus:ring-violet-300" />
               <button onClick={saveOwnerEdit}
